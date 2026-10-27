@@ -5,6 +5,12 @@ from src.core.database import make_engine, make_session_factory
 from src.core.unit_of_work import UnitOfWork
 from src.repository.asset.asset_repository import AssetRepository
 from src.repository.run.run_repository import RunRepository
+from src.repository.song.song_repository import SongRepository
+from src.service.intake.intake_service import IntakeService
+from src.service.intake.preview_service import PreviewService
+from src.service.local.beat_service import BeatService
+from src.service.local.ffmpeg_service import FfmpegService
+from src.service.local.forced_align_service import ForcedAlignService
 
 
 class Container(containers.DeclarativeContainer):
@@ -22,3 +28,20 @@ class Container(containers.DeclarativeContainer):
     # repositories
     run_repository = providers.Singleton(RunRepository, session_factory=session_factory)
     asset_repository = providers.Singleton(AssetRepository, session_factory=session_factory)
+    song_repository = providers.Singleton(SongRepository, session_factory=session_factory)
+
+    # local tools
+    ffmpeg_service = providers.Singleton(FfmpegService)
+    forced_align_service = providers.Singleton(ForcedAlignService, device=settings.provided.device)
+    beat_service = providers.Singleton(BeatService, device=settings.provided.device)
+
+    # services
+    intake_service = providers.Singleton(
+        IntakeService,
+        run_repository=run_repository,
+        song_repository=song_repository,
+        ffmpeg=ffmpeg_service,
+        aligner=forced_align_service,
+        beats=beat_service,
+    )
+    preview_service = providers.Singleton(PreviewService, ffmpeg=ffmpeg_service)

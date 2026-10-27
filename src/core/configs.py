@@ -10,4 +10,5 @@ class Settings(BaseSettings):
     claude_api_key: str | None = Field(default=None, validation_alias="CLAUDE_API_KEY")
     db_url: str = Field(default="sqlite:///data/pipeline.db", validation_alias="PIPELINE_DB_URL")
     asset_dir: str = Field(default="data/assets", validation_alias="PIPELINE_ASSET_DIR")
+    device: str = Field(default="cpu", validation_alias="PIPELINE_DEVICE")
     spend_cap_usd: float = Field(default=25.0, validation_alias="PIPELINE_SPEND_CAP_USD")

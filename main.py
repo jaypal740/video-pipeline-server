@@ -9,8 +9,12 @@ from src.schema.run.run_schema import Run
 app = typer.Typer(no_args_is_help=True)
 db_app = typer.Typer(no_args_is_help=True, help="Database commands.")
 run_app = typer.Typer(no_args_is_help=True, help="Run commands.")
+stage_app = typer.Typer(no_args_is_help=True, help="Run one stage of a run.")
+intake_app = typer.Typer(no_args_is_help=True, help="Inspect the intake stage.")
 app.add_typer(db_app, name="db")
 app.add_typer(run_app, name="run")
+app.add_typer(stage_app, name="stage")
+app.add_typer(intake_app, name="intake")
 
 container = Container()
 
@@ -56,6 +60,35 @@ def run_show(run_id: str) -> None:
     for state in container.run_repository().stages(run_id):
         typer.echo(f"  {state.stage:16s} {state.status:12s} attempts={state.attempts}")
     typer.echo(f"  spent ${container.asset_repository().run_cost(run_id):.2f}")
+
+
+@stage_app.command("intake")
+def stage_intake(run_id: str, force: bool = typer.Option(False, "--force", help="Analyse again even if cached.")) -> None:
+    """Stage 1: time every word of the lyrics and find the beats."""
+    analysis = container.intake_service().run(run_id, force=force)
+    unclear = [l for l in analysis.lines if l.unclear]
+    typer.echo(f"{'accepted' if analysis.accepted else 'REJECTED'}: {len(analysis.lines)} lines, {len(analysis.words)} words, "
+               f"confidence {analysis.tool_versions.get('confidence', 0):.2f}, {len(unclear)} unclear, "
+               f"{analysis.bpm or 0:.0f} BPM, beat strength {analysis.beat_strength:.2f}")
+    if analysis.reason:
+        typer.echo(analysis.reason)
+    for line in analysis.lines:
+        flag = "  UNCLEAR" if line.unclear else ""
+        typer.echo(f"  {line.index:3d}  {line.start:7.2f}  {line.end:7.2f}  {line.confidence:.2f}  {line.text[:60]}{flag}")
+    if not analysis.accepted:
+        raise typer.Exit(code=1)
+
+
+@intake_app.command("preview")
+def intake_preview(run_id: str) -> None:
+    """Write the check video: lines and words on screen as they are said, ticks on the beats."""
+    run = container.run_repository().runs.get(run_id)
+    if run is None:
+        typer.echo(f"Run {run_id} not found")
+        raise typer.Exit(code=1)
+    analysis = container.intake_service().analysis_for(run_id)
+    out_dir = Path(container.settings().asset_dir) / "runs" / run_id / "intake"
+    typer.echo(container.preview_service().render(analysis, Path(run.audio_path), out_dir))
 
 
 if __name__ == "__main__":
