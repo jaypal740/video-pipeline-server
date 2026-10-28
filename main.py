@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import typer
+import uvicorn
 
 from src.core.container import Container
 from src.core.database import create_tables
@@ -11,9 +12,11 @@ app = typer.Typer(no_args_is_help=True)
 db_app = typer.Typer(no_args_is_help=True, help="Database commands.")
 song_app = typer.Typer(no_args_is_help=True, help="Songs: add one, analyse it (stage 1 intake), check it.")
 run_app = typer.Typer(no_args_is_help=True, help="Video runs made from an analysed song.")
+key_app = typer.Typer(no_args_is_help=True, help="API keys products call the server with.")
 app.add_typer(db_app, name="db")
 app.add_typer(song_app, name="song")
 app.add_typer(run_app, name="run")
+app.add_typer(key_app, name="key")
 
 container = Container()
 
@@ -24,6 +27,37 @@ def db_init() -> None:
     engine = container.engine()
     create_tables(engine)
     typer.echo(f"Initialised {engine.url}")
+
+
+@app.command("serve")
+def serve(host: str = typer.Option("127.0.0.1", "--host"), port: int = typer.Option(8000, "--port")) -> None:
+    """Start the API server."""
+    uvicorn.run("src.api.app:app", host=host, port=port)
+
+
+@key_app.command("create")
+def key_create(
+    name: str = typer.Argument(..., help="The product the key is for, e.g. jamwise."),
+    monthly_cap: float | None = typer.Option(None, "--monthly-cap", help="Monthly spend cap in USD."),
+) -> None:
+    """Issue a key. It is printed once and never stored; copy it now."""
+    key, raw = container.auth_service().create(name, monthly_cap)
+    typer.echo(f"{key.prefix}  {key.name}\n{raw}")
+
+
+@key_app.command("list")
+def key_list() -> None:
+    """Every key, by its prefix."""
+    for key in container.auth_service().list():
+        state = "revoked" if key.revoked_at else "active"
+        typer.echo(f"{key.prefix}  {state:7s}  {key.name}  last used {key.last_used_at or 'never'}")
+
+
+@key_app.command("revoke")
+def key_revoke(prefix: str) -> None:
+    """Revoke a key by its prefix; requests with it are refused from now on."""
+    key = container.auth_service().revoke(prefix)
+    typer.echo(f"{key.prefix} revoked")
 
 
 @song_app.command("add")

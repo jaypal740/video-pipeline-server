@@ -4,8 +4,10 @@ from src.core.configs import Settings
 from src.core.database import make_engine, make_session_factory
 from src.core.unit_of_work import UnitOfWork
 from src.repository.asset.asset_repository import AssetRepository
+from src.repository.auth.auth_repository import AuthRepository
 from src.repository.run.run_repository import RunRepository
 from src.repository.song.song_repository import SongRepository
+from src.service.auth.auth_service import AuthService
 from src.service.intake.intake_service import IntakeService
 from src.service.intake.preview_service import PreviewService
 from src.service.local.beat_service import BeatService
@@ -30,6 +32,7 @@ class Container(containers.DeclarativeContainer):
     run_repository = providers.Singleton(RunRepository, session_factory=session_factory)
     asset_repository = providers.Singleton(AssetRepository, session_factory=session_factory)
     song_repository = providers.Singleton(SongRepository, session_factory=session_factory)
+    auth_repository = providers.Singleton(AuthRepository, session_factory=session_factory)
 
     # local tools
     ffmpeg_service = providers.Singleton(FfmpegService)
@@ -37,6 +40,7 @@ class Container(containers.DeclarativeContainer):
     beat_service = providers.Singleton(BeatService, device=settings.provided.device)
 
     # services
+    auth_service = providers.Singleton(AuthService, auth_repository=auth_repository)
     song_service = providers.Singleton(SongService, song_repository=song_repository, settings=settings)
     intake_service = providers.Singleton(
         IntakeService,
