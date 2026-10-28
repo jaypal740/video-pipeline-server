@@ -8,7 +8,7 @@ from src.schema.song.song_analysis_schema import SongAnalysis
 from src.schema.song.song_schema import Song, SongStatus
 from src.service.intake.intake_alignment import REJECT_BELOW, lyric_lines, song_confidence, spoken_tokens, timed_words
 from src.service.intake.intake_beats import beat_strength, bpm_of, onset_envelope
-from src.service.intake.intake_lyrics import clean_lyrics
+from src.service.intake.intake_lyrics import parse_lyrics
 from src.service.local.beat_service import SAMPLE_RATE as BEAT_RATE
 from src.service.local.beat_service import BeatService
 from src.service.local.ffmpeg_service import FfmpegService
@@ -18,7 +18,7 @@ from src.service.local.forced_align_service import ForcedAlignService
 logger = logging.getLogger(__name__)
 
 # Bumped whenever the analysis changes, so every song is analysed again with the new code.
-ANALYZER_VERSION = "intake.v1"
+ANALYZER_VERSION = "intake.v2"
 
 
 def sha256_file(path: Path) -> str:
@@ -49,11 +49,12 @@ class IntakeService:
                 expires_at: datetime | None = None) -> SongAnalysis:
         """Analyse any audio + lyrics pair, a library song's or a job's. expires_at None keeps the
         analysis forever; a shared analysis keeps the longest retention any of its users asked for."""
-        lyrics = clean_lyrics(lyrics_text)
-        if not lyrics:
+        parsed = parse_lyrics(lyrics_text)
+        if not parsed:
             raise ValueError("The lyrics have no lines to align")
+        lyrics, sections = [line for _, line in parsed], [section for section, _ in parsed]
         audio_sha = sha256_file(audio)
-        lyrics_sha = hashlib.sha256("\n".join(lyrics).encode()).hexdigest()
+        lyrics_sha = hashlib.sha256("\n".join(f"{s or ''}|{l}" for s, l in parsed).encode()).hexdigest()
         key = hashlib.sha256(f"{ANALYZER_VERSION}|{audio_sha}|{lyrics_sha}".encode()).hexdigest()
 
         cached = self._songs.find_analysis(key)
@@ -63,7 +64,7 @@ class IntakeService:
                 cached.expires_at = keep
                 cached = self._songs.analyses.update(cached)
             return cached
-        analysis = self._analyse(audio, lyrics, key, audio_sha, lyrics_sha)
+        analysis = self._analyse(audio, lyrics, sections, key, audio_sha, lyrics_sha)
         if cached is None:
             analysis.expires_at = expires_at
             return self._songs.analyses.add(analysis)
@@ -99,11 +100,14 @@ class IntakeService:
             raise LookupError(f"Song {ref} not found")
         return song
 
-    def _analyse(self, audio: Path, lyrics: list[str], key: str, audio_sha: str, lyrics_sha: str) -> SongAnalysis:
+    def _analyse(self, audio: Path, lyrics: list[str], sections: list[str | None], key: str, audio_sha: str,
+                 lyrics_sha: str) -> SongAnalysis:
         speech = self._ffmpeg.decode(audio, ALIGN_RATE)
         tokens, owners = spoken_tokens(lyrics)
         words = timed_words(lyrics, owners, self._aligner.align(speech, tokens))
         lines = lyric_lines(lyrics, words)
+        for line, section in zip(lines, sections):
+            line.section = section
         confidence = song_confidence(lines)
         accepted = confidence >= REJECT_BELOW
         beats, downbeats = self._beats.track(self._ffmpeg.decode(audio, BEAT_RATE))

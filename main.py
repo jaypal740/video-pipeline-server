@@ -5,8 +5,10 @@ import uvicorn
 
 from src.core.container import Container
 from src.core.database import create_tables
+from src.schema.lesson.lesson_schema import VideoType
 from src.schema.run.run_schema import Run
 from src.schema.song.song_schema import SongStatus
+from src.service.lesson.lesson_rules import band_for
 
 app = typer.Typer(no_args_is_help=True)
 db_app = typer.Typer(no_args_is_help=True, help="Database commands.")
@@ -108,7 +110,7 @@ def song_preview(song: str) -> None:
 def run_create(
     song: str = typer.Option(..., "--song", help="Song id or name; it must be analysed first."),
     name: str | None = typer.Option(None, "--name", help="Working title; defaults to the song name."),
-    audience: str | None = typer.Option(None, "--audience", help="Audience profile, e.g. teen."),
+    grade: int | None = typer.Option(None, "--grade", min=0, max=8, help="Lowest grade it's for; 0 is kindergarten."),
     brief: str | None = typer.Option(None, "--brief", help="What the video should teach."),
 ) -> None:
     """Start a video run from an analysed song."""
@@ -117,8 +119,24 @@ def run_create(
         typer.echo(f"Song {record.name!r} is {record.status}; run `song analyse {record.name}` first")
         raise typer.Exit(code=1)
     run = container.run_repository().runs.add(
-        Run(song_id=record.id, name=name or record.name, audience=audience, brief=brief))
+        Run(song_id=record.id, name=name or record.name, audience=band_for(grade) if grade is not None else None,
+            brief=brief))
     typer.echo(run.id)
+
+
+@run_app.command("lesson")
+def run_lesson(
+    run_id: str,
+    model: str | None = typer.Option(None, "--model", help="Override the lesson model."),
+    video_type: VideoType | None = typer.Option(None, "--type", help="Ask for this video type."),
+    force: bool = typer.Option(False, "--force", help="Plan again even if nothing changed."),
+) -> None:
+    """Stage 2: what each line teaches and shows, and the video type for the run's grade band."""
+    plan = container.lesson_service().run(run_id, model=model, video_type=video_type, force=force)
+    typer.echo(f"{plan.topic} ({plan.subject}), grades {plan.grade_band}: {plan.video_type}. {plan.type_reason}")
+    typer.echo(f"terms: {', '.join(t.term for t in plan.key_terms)}")
+    for line in plan.lines:
+        typer.echo(f"  {line.index:3d}  {line.tag:14s}  {line.show[:90]}")
 
 
 @run_app.command("list")

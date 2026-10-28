@@ -10,6 +10,10 @@ from src.repository.song.song_repository import SongRepository
 from src.service.auth.auth_service import AuthService
 from src.service.intake.intake_service import IntakeService
 from src.service.intake.preview_service import PreviewService
+from src.service.lesson.lesson_service import LessonService
+from src.service.llm.anthropic_service import AnthropicService
+from src.service.llm.llm_service import LlmService
+from src.service.llm.openai_service import OpenAiService
 from src.service.local.beat_service import BeatService
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.local.forced_align_service import ForcedAlignService
@@ -39,6 +43,11 @@ class Container(containers.DeclarativeContainer):
     forced_align_service = providers.Singleton(ForcedAlignService, device=settings.provided.device)
     beat_service = providers.Singleton(BeatService, device=settings.provided.device)
 
+    # model providers
+    openai_service = providers.Singleton(OpenAiService, api_key=settings.provided.openai_api_key)
+    anthropic_service = providers.Singleton(AnthropicService, api_key=settings.provided.claude_api_key)
+    llm_service = providers.Singleton(LlmService, openai=openai_service, anthropic=anthropic_service)
+
     # services
     auth_service = providers.Singleton(AuthService, auth_repository=auth_repository)
     song_service = providers.Singleton(SongService, song_repository=song_repository, settings=settings)
@@ -50,3 +59,11 @@ class Container(containers.DeclarativeContainer):
         beats=beat_service,
     )
     preview_service = providers.Singleton(PreviewService, ffmpeg=ffmpeg_service)
+    lesson_service = providers.Singleton(
+        LessonService,
+        run_repository=run_repository,
+        song_repository=song_repository,
+        asset_repository=asset_repository,
+        llm=llm_service,
+        settings=settings,
+    )

@@ -1,0 +1,5 @@
+type = "process"
+pick_when = "The song goes through steps in a fixed order."
+world = "Show each step in order, in the same place, so the viewer sees what changes."
+on_camera = "The thing that changes, and what changes it."
+face_to_camera_share = 0.2

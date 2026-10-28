@@ -1,0 +1,5 @@
+type = "concept"
+pick_when = "The song explains an idea: how or why something happens."
+world = "Show the idea working, step by logical step, so the viewer sees the cause and the effect."
+on_camera = "Whatever the idea is about; a presenter only on hook lines."
+face_to_camera_share = 0.25

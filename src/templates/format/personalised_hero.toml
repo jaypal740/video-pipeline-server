@@ -1,0 +1,5 @@
+type = "personalised_hero"
+pick_when = "The song talks to the viewer directly, like a narrator."
+world = "A narrator guides the viewer, cutting to scenes of what they describe."
+on_camera = "The narrator on hooks and choruses; the scenes show the ideas."
+face_to_camera_share = 0.6

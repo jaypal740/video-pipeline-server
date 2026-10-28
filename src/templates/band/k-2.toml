@@ -1,0 +1,8 @@
+band = "k-2"
+grades = [0, 1, 2]
+allowed_types = ["personalised_hero", "process"]
+look = "Bright, soft, rounded 2D or 3D cartoon; friendly and warm."
+shot_seconds = [4, 6]
+face_to_camera_share = 0.6
+on_screen_text = "Big numbers only."
+avoid = ["anything scary, including germs or animals drawn as monsters", "more than one idea per shot"]

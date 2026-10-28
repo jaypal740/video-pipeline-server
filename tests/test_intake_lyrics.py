@@ -1,4 +1,4 @@
-from src.service.intake.intake_lyrics import clean_lyrics, spoken
+from src.service.intake.intake_lyrics import clean_lyrics, parse_lyrics, spoken
 
 
 def test_clean_lyrics_drops_comments_blanks_and_markup():
@@ -9,6 +9,11 @@ def test_clean_lyrics_drops_comments_blanks_and_markup():
 def test_clean_lyrics_drops_section_tags_and_dashes():
     text = "[verse]\nBacteria **multiply** fast\u2014then more\n\n[Chorus 2]\nOne -- two\nA [quiet] line\n"
     assert clean_lyrics(text) == ["Bacteria multiply fast then more", "One two", "A [quiet] line"]
+
+
+def test_each_line_keeps_its_section_without_the_number():
+    text = "Before any tag\n[Verse 1]\nCells split\n[Chorus 2]\nSing it\n"
+    assert parse_lyrics(text) == [(None, "Before any tag"), ("verse", "Cells split"), ("chorus", "Sing it")]
 
 
 def test_numbers_are_spoken_as_words():

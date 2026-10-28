@@ -12,3 +12,4 @@ class Settings(BaseSettings):
     asset_dir: str = Field(default="data/assets", validation_alias="PIPELINE_ASSET_DIR")
     device: str = Field(default="cpu", validation_alias="PIPELINE_DEVICE")
     spend_cap_usd: float = Field(default=25.0, validation_alias="PIPELINE_SPEND_CAP_USD")
+    lesson_model: str = Field(default="claude-opus-5-5", validation_alias="PIPELINE_LESSON_MODEL")

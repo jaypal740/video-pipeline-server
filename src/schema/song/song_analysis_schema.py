@@ -19,7 +19,7 @@ class TimedWord(BaseModel):
 
 class LyricLine(BaseModel):
     """One line of the lyrics. unclear: the audio may not say these words, so no shot is built on them
-    until a person checks the line."""
+    until a person checks the line. section: the lyrics' tag it sits under ("chorus"), None if untagged."""
 
     index: int
     text: str
@@ -27,6 +27,7 @@ class LyricLine(BaseModel):
     end: float
     confidence: float
     unclear: bool = False
+    section: str | None = None
 
 
 class SongAnalysis(Entity):

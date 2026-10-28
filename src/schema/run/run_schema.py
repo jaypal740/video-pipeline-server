@@ -5,7 +5,8 @@ from src.schema.enums import RunStatus, StageName
 
 
 class Run(Entity):
-    """One video made from an analysed song: where it stands and the model versions it is pinned to."""
+    """One video made from an analysed song: where it stands and the model versions it is pinned to.
+    audience is the grade band (k-2, 3-5, 6-8) the video is made for."""
 
     song_id: str
     name: str

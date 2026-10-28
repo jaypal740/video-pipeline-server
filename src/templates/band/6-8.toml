@@ -1,0 +1,9 @@
+band = "6-8"
+grades = [6, 7, 8]
+allowed_types = ["concept", "process", "journey"]
+override_types = ["personalised_hero"]
+look = "Grown-up realistic or documentary-style illustration; no mascots."
+shot_seconds = [2, 4]
+face_to_camera_share = 0.2
+on_screen_text = "Numbers, key terms and short labels."
+avoid = ["gore", "babyish characters"]

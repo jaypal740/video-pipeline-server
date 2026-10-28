@@ -1,0 +1,5 @@
+type = "journey"
+pick_when = "The song moves through times or places in order."
+world = "Show each time or place in order, linked by who or what is travelling."
+on_camera = "The same traveller or thing throughout."
+face_to_camera_share = 0.3

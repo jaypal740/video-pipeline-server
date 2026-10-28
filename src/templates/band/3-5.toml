@@ -1,0 +1,8 @@
+band = "3-5"
+grades = [3, 4, 5]
+allowed_types = ["concept", "process", "journey", "personalised_hero"]
+look = "Clean stylised 3D or flat illustration."
+shot_seconds = [3, 5]
+face_to_camera_share = 0.4
+on_screen_text = "Numbers and key terms."
+avoid = ["gore", "realistic injuries"]

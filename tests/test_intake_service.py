@@ -142,3 +142,11 @@ def test_a_shared_analysis_keeps_the_longest_retention(container, audio):
     assert service.run(add_song(container, audio).id).expires_at is None
     assert service.analyse(audio, LYRICS, expires_at=soon).expires_at is None
     assert aligner.calls == 1
+
+
+def test_lines_keep_their_section_and_tags_change_the_analysis(container, audio):
+    service = make(container, FakeAligner())
+    plain = service.run(add_song(container, audio, "a").name)
+    tagged = service.run(add_song(container, audio, "b", lyrics="[Chorus]\n" + LYRICS).name)
+    assert tagged.id != plain.id and [l.section for l in tagged.lines] == ["chorus", "chorus"]
+    assert [l.section for l in plain.lines] == [None, None]
