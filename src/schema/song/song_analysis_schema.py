@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from src.schema.base_schema import Entity
@@ -28,7 +30,8 @@ class LyricLine(BaseModel):
 
 
 class SongAnalysis(Entity):
-    """Stage 1 output for one audio + lyrics pair. cache_key is reused by every run of the same song."""
+    """Stage 1 output for one audio + lyrics pair. cache_key is reused by every run of the same song.
+    expires_at: None for library songs (kept forever); a job's song expires with the job's files."""
 
     cache_key: str
     audio_sha256: str
@@ -43,3 +46,4 @@ class SongAnalysis(Entity):
     downbeats: list[float] = Field(default_factory=list)
     beat_strength: float = 0.0
     tool_versions: dict = Field(default_factory=dict)
+    expires_at: datetime | None = None

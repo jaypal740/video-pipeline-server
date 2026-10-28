@@ -5,16 +5,15 @@ import typer
 from src.core.container import Container
 from src.core.database import create_tables
 from src.schema.run.run_schema import Run
+from src.schema.song.song_schema import SongStatus
 
 app = typer.Typer(no_args_is_help=True)
 db_app = typer.Typer(no_args_is_help=True, help="Database commands.")
-run_app = typer.Typer(no_args_is_help=True, help="Run commands.")
-stage_app = typer.Typer(no_args_is_help=True, help="Run one stage of a run.")
-intake_app = typer.Typer(no_args_is_help=True, help="Inspect the intake stage.")
+song_app = typer.Typer(no_args_is_help=True, help="Songs: add one, analyse it (stage 1 intake), check it.")
+run_app = typer.Typer(no_args_is_help=True, help="Video runs made from an analysed song.")
 app.add_typer(db_app, name="db")
+app.add_typer(song_app, name="song")
 app.add_typer(run_app, name="run")
-app.add_typer(stage_app, name="stage")
-app.add_typer(intake_app, name="intake")
 
 container = Container()
 
@@ -27,45 +26,28 @@ def db_init() -> None:
     typer.echo(f"Initialised {engine.url}")
 
 
-@run_app.command("create")
-def run_create(
-    name: str = typer.Option(..., "--name", help="Working title."),
+@song_app.command("add")
+def song_add(
+    name: str = typer.Option(..., "--name", help="Unique song name, e.g. antibiotic-resistance."),
     audio: Path = typer.Option(..., "--audio", exists=True, dir_okay=False, help="Song audio file."),
-    script: Path = typer.Option(..., "--script", exists=True, dir_okay=False, help="Lyrics or narration text."),
-    audience: str | None = typer.Option(None, "--audience", help="Audience profile, e.g. teen."),
-    brief: str | None = typer.Option(None, "--brief", help="What the video should teach."),
+    lyrics: Path = typer.Option(..., "--lyrics", exists=True, dir_okay=False, help="Lyrics or narration text."),
 ) -> None:
-    """Register a new run with its inputs."""
-    run = container.run_repository().runs.add(
-        Run(name=name, audio_path=str(audio.resolve()), script_path=str(script.resolve()), audience=audience, brief=brief)
-    )
-    typer.echo(run.id)
+    """Register a song. Its audio is copied into the asset folder."""
+    song = container.song_service().add(name, audio, lyrics.read_text())
+    typer.echo(song.id)
 
 
-@run_app.command("list")
-def run_list() -> None:
-    """Every run, oldest first."""
-    for run in container.run_repository().runs.list():
-        typer.echo(f"{run.id}  {run.status:8s}  {run.current_stage:16s}  {run.name}")
+@song_app.command("list")
+def song_list() -> None:
+    """Every song, oldest first."""
+    for song in container.song_service().list():
+        typer.echo(f"{song.id}  {song.status:9s}  {song.name}")
 
 
-@run_app.command("show")
-def run_show(run_id: str) -> None:
-    """One run: inputs, stage states and spend so far."""
-    run = container.run_repository().runs.get(run_id)
-    if run is None:
-        typer.echo(f"Run {run_id} not found")
-        raise typer.Exit(code=1)
-    typer.echo(run.model_dump_json(indent=2))
-    for state in container.run_repository().stages(run_id):
-        typer.echo(f"  {state.stage:16s} {state.status:12s} attempts={state.attempts}")
-    typer.echo(f"  spent ${container.asset_repository().run_cost(run_id):.2f}")
-
-
-@stage_app.command("intake")
-def stage_intake(run_id: str, force: bool = typer.Option(False, "--force", help="Analyse again even if cached.")) -> None:
-    """Stage 1: time every word of the lyrics and find the beats."""
-    analysis = container.intake_service().run(run_id, force=force)
+@song_app.command("analyse")
+def song_analyse(song: str, force: bool = typer.Option(False, "--force", help="Analyse again even if cached.")) -> None:
+    """Stage 1 intake: time every word of the lyrics and find the beats. SONG is its id or name."""
+    analysis = container.intake_service().run(song, force=force)
     unclear = [l for l in analysis.lines if l.unclear]
     typer.echo(f"{'accepted' if analysis.accepted else 'REJECTED'}: {len(analysis.lines)} lines, {len(analysis.words)} words, "
                f"confidence {analysis.tool_versions.get('confidence', 0):.2f}, {len(unclear)} unclear, "
@@ -79,16 +61,50 @@ def stage_intake(run_id: str, force: bool = typer.Option(False, "--force", help=
         raise typer.Exit(code=1)
 
 
-@intake_app.command("preview")
-def intake_preview(run_id: str) -> None:
+@song_app.command("preview")
+def song_preview(song: str) -> None:
     """Write the check video: lines and words on screen as they are said, ticks on the beats."""
+    record = container.song_service().get(song)
+    analysis = container.intake_service().analysis_for(record.id)
+    out_dir = Path(container.settings().asset_dir) / "songs" / record.id / "intake"
+    typer.echo(container.preview_service().render(analysis, Path(record.audio_path), out_dir))
+
+
+@run_app.command("create")
+def run_create(
+    song: str = typer.Option(..., "--song", help="Song id or name; it must be analysed first."),
+    name: str | None = typer.Option(None, "--name", help="Working title; defaults to the song name."),
+    audience: str | None = typer.Option(None, "--audience", help="Audience profile, e.g. teen."),
+    brief: str | None = typer.Option(None, "--brief", help="What the video should teach."),
+) -> None:
+    """Start a video run from an analysed song."""
+    record = container.song_service().get(song)
+    if record.status != SongStatus.READY:
+        typer.echo(f"Song {record.name!r} is {record.status}; run `song analyse {record.name}` first")
+        raise typer.Exit(code=1)
+    run = container.run_repository().runs.add(
+        Run(song_id=record.id, name=name or record.name, audience=audience, brief=brief))
+    typer.echo(run.id)
+
+
+@run_app.command("list")
+def run_list() -> None:
+    """Every run, oldest first."""
+    for run in container.run_repository().runs.list():
+        typer.echo(f"{run.id}  {run.status:8s}  {run.current_stage:16s}  {run.name}")
+
+
+@run_app.command("show")
+def run_show(run_id: str) -> None:
+    """One run: its song, stage states and spend so far."""
     run = container.run_repository().runs.get(run_id)
     if run is None:
         typer.echo(f"Run {run_id} not found")
         raise typer.Exit(code=1)
-    analysis = container.intake_service().analysis_for(run_id)
-    out_dir = Path(container.settings().asset_dir) / "runs" / run_id / "intake"
-    typer.echo(container.preview_service().render(analysis, Path(run.audio_path), out_dir))
+    typer.echo(run.model_dump_json(indent=2))
+    for state in container.run_repository().stages(run_id):
+        typer.echo(f"  {state.stage:16s} {state.status:12s} attempts={state.attempts}")
+    typer.echo(f"  spent ${container.asset_repository().run_cost(run_id):.2f}")
 
 
 if __name__ == "__main__":

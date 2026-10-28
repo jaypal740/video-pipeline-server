@@ -15,17 +15,21 @@ poetry run pytest -q
 ## Usage
 
 ```bash
-poetry run python main.py run create --name "Ocean" --audio song.mp3 --script lyrics.txt
+poetry run python main.py song add --name antibiotic-resistance --audio audio.mp3 --lyrics lyrics.txt
+poetry run python main.py song analyse antibiotic-resistance     # stage 1: word timings, beats
+poetry run python main.py song preview antibiotic-resistance     # check video: words highlighted as said, beat ticks
+poetry run python main.py song list
+poetry run python main.py run create --song antibiotic-resistance --audience teen
 poetry run python main.py run list
 poetry run python main.py run show <run_id>
-poetry run python main.py stage intake <run_id>      # stage 1: word timings, beats
-poetry run python main.py intake preview <run_id>    # check video: words highlighted as said, beat ticks
 ```
+
+A song is analysed once; every video run made from it reuses the analysis.
 
 ## Stage 1: intake
 
-Times every written word against the audio and finds the beats. One analysis per audio + lyrics pair,
-cached by their hashes and reused by every run of the same song.
+Times every written word of a song against its audio and finds the beats. One analysis per audio +
+lyrics pair, cached by their hashes.
 
 - Word timing: forced alignment (WhisperX, wav2vec2). Numbers are spoken as words first (1858 ->
   eighteen fifty eight), since the aligner only knows letters.

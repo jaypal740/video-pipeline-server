@@ -1,19 +1,21 @@
 import re
-from pathlib import Path
 
 from num2words import num2words
 
 _MARKUP = re.compile(r"\*\*(.*?)\*\*")
+_SECTION_TAG = re.compile(r"^\[[^\]]*\]$")
+_DASH = re.compile(r"\s*(?:\u2014|--)\s*")
 _NUMBER = re.compile(r"^(\$?)(\d[\d,]*(?:\.\d+)?)(%|st|nd|rd|th)?$")
 _EDGE_PUNCT = re.compile(r"^[^\w$]+|[^\w%]+$")
 
 
-def read_lyrics(path: Path) -> list[str]:
-    """The lines to align: blank lines and # comments dropped, **bold** vocabulary markup removed."""
+def clean_lyrics(text: str) -> list[str]:
+    """The lines to align: blank lines, # comments and section tags ([verse], [Chorus 2]) dropped,
+    **bold** vocabulary markup removed, em dashes and -- turned into spaces."""
     lines = []
-    for raw in Path(path).read_text().splitlines():
-        line = _MARKUP.sub(r"\1", raw).strip()
-        if line and not line.startswith("#"):
+    for raw in text.splitlines():
+        line = _DASH.sub(" ", _MARKUP.sub(r"\1", raw)).strip()
+        if line and not line.startswith("#") and not _SECTION_TAG.match(line):
             lines.append(line)
     return lines
 

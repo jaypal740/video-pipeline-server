@@ -1,16 +1,14 @@
 import hashlib
 import logging
+from datetime import datetime
 from pathlib import Path
 
-from src.repository.run.run_repository import RunRepository
 from src.repository.song.song_repository import SongRepository
-from src.schema.base_schema import utcnow
-from src.schema.enums import StageName, StageStatus
-from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_analysis_schema import SongAnalysis
+from src.schema.song.song_schema import Song, SongStatus
 from src.service.intake.intake_alignment import REJECT_BELOW, lyric_lines, song_confidence, spoken_tokens, timed_words
 from src.service.intake.intake_beats import beat_strength, bpm_of, onset_envelope
-from src.service.intake.intake_lyrics import read_lyrics
+from src.service.intake.intake_lyrics import clean_lyrics
 from src.service.local.beat_service import SAMPLE_RATE as BEAT_RATE
 from src.service.local.beat_service import BeatService
 from src.service.local.ffmpeg_service import FfmpegService
@@ -31,54 +29,75 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-class IntakeService:
-    """Stage 1: time every written word against the audio and find the beats. One analysis per
-    audio + lyrics pair, reused by every run of the same song."""
+def _longest(a: datetime | None, b: datetime | None) -> datetime | None:
+    """The later of two expiry times; None (never expires) beats any time."""
+    return None if a is None or b is None else max(a, b)
 
-    def __init__(self, run_repository: RunRepository, song_repository: SongRepository, ffmpeg: FfmpegService,
-                 aligner: ForcedAlignService, beats: BeatService) -> None:
-        self._runs = run_repository
+
+class IntakeService:
+    """Stage 1: time every written word of a song against its audio and find the beats. One analysis
+    per audio + lyrics pair: a second song with the same audio and words reuses it."""
+
+    def __init__(self, song_repository: SongRepository, ffmpeg: FfmpegService, aligner: ForcedAlignService,
+                 beats: BeatService) -> None:
         self._songs = song_repository
         self._ffmpeg = ffmpeg
         self._aligner = aligner
         self._beats = beats
 
-    def run(self, run_id: str, force: bool = False) -> SongAnalysis:
-        run = self._runs.runs.get(run_id)
-        if run is None:
-            raise LookupError(f"Run {run_id} not found")
-        lyrics = read_lyrics(Path(run.script_path))
+    def analyse(self, audio: Path, lyrics_text: str, force: bool = False,
+                expires_at: datetime | None = None) -> SongAnalysis:
+        """Analyse any audio + lyrics pair, a library song's or a job's. expires_at None keeps the
+        analysis forever; a shared analysis keeps the longest retention any of its users asked for."""
+        lyrics = clean_lyrics(lyrics_text)
         if not lyrics:
-            raise ValueError(f"{run.script_path} has no lyric lines")
-        audio_sha = sha256_file(Path(run.audio_path))
+            raise ValueError("The lyrics have no lines to align")
+        audio_sha = sha256_file(audio)
         lyrics_sha = hashlib.sha256("\n".join(lyrics).encode()).hexdigest()
         key = hashlib.sha256(f"{ANALYZER_VERSION}|{audio_sha}|{lyrics_sha}".encode()).hexdigest()
 
-        state = self._start(run_id, key)
+        cached = self._songs.find_analysis(key)
+        if cached is not None and not force:
+            keep = _longest(cached.expires_at, expires_at)
+            if keep != cached.expires_at:
+                cached.expires_at = keep
+                cached = self._songs.analyses.update(cached)
+            return cached
+        analysis = self._analyse(audio, lyrics, key, audio_sha, lyrics_sha)
+        if cached is None:
+            analysis.expires_at = expires_at
+            return self._songs.analyses.add(analysis)
+        analysis.id, analysis.created_at = cached.id, cached.created_at
+        analysis.expires_at = _longest(cached.expires_at, expires_at)
+        return self._songs.analyses.update(analysis)
+
+    def run(self, song_ref: str, force: bool = False) -> SongAnalysis:
+        """Analyse a library song and record the outcome on it."""
+        song = self._song(song_ref)
+        song.status, song.reason = SongStatus.ANALYSING, None
+        song = self._songs.songs.update(song)
         try:
-            cached = self._songs.find_analysis(key)
-            if cached is not None and not force:
-                analysis, hit = cached, True
-            else:
-                analysis = self._analyse(Path(run.audio_path), lyrics, key, audio_sha, lyrics_sha)
-                if cached is not None:
-                    analysis.id, analysis.created_at = cached.id, cached.created_at
-                    analysis = self._songs.analyses.update(analysis)
-                else:
-                    analysis = self._songs.analyses.add(analysis)
-                hit = False
+            analysis = self.analyse(Path(song.audio_path), song.lyrics, force=force)
         except Exception as exc:
-            self._finish(state, StageStatus.FAILED, error=str(exc) or type(exc).__name__)
+            song.status, song.reason = SongStatus.FAILED, str(exc) or type(exc).__name__
+            self._songs.songs.update(song)
             raise
-        self._finish(state, StageStatus.DONE if analysis.accepted else StageStatus.FAILED,
-                     output={"analysis_id": analysis.id, "cache_hit": hit}, error=analysis.reason)
+        song.status = SongStatus.READY if analysis.accepted else SongStatus.REJECTED
+        song.analysis_id, song.reason = analysis.id, analysis.reason
+        self._songs.songs.update(song)
         return analysis
 
-    def analysis_for(self, run_id: str) -> SongAnalysis:
-        state = self._runs.stage(run_id, StageName.INTAKE)
-        if state is None or "analysis_id" not in state.output:
-            raise LookupError(f"Run {run_id} has no intake analysis; run the intake stage first")
-        return self._songs.analyses.get(state.output["analysis_id"])
+    def analysis_for(self, song_ref: str) -> SongAnalysis:
+        song = self._song(song_ref)
+        if song.analysis_id is None:
+            raise LookupError(f"Song {song.name!r} has not been analysed; run intake on it first")
+        return self._songs.analyses.get(song.analysis_id)
+
+    def _song(self, ref: str) -> Song:
+        song = self._songs.find_song(ref)
+        if song is None:
+            raise LookupError(f"Song {ref} not found")
+        return song
 
     def _analyse(self, audio: Path, lyrics: list[str], key: str, audio_sha: str, lyrics_sha: str) -> SongAnalysis:
         speech = self._ffmpeg.decode(audio, ALIGN_RATE)
@@ -100,17 +119,3 @@ class IntakeService:
             beat_strength=beat_strength(onset_envelope(speech, ALIGN_RATE), bpm),
             tool_versions={"analyzer": ANALYZER_VERSION, "aligner": self._aligner.version,
                            "beats": self._beats.version, "confidence": confidence})
-
-    def _start(self, run_id: str, key: str) -> StageState:
-        state = self._runs.stage(run_id, StageName.INTAKE)
-        if state is None:
-            state = self._runs.stage_states.add(StageState(run_id=run_id, stage=StageName.INTAKE))
-        state.status, state.attempts, state.input_hash = StageStatus.RUNNING, state.attempts + 1, key
-        state.started_at, state.finished_at, state.error = utcnow(), None, None
-        return self._runs.stage_states.update(state)
-
-    def _finish(self, state: StageState, status: StageStatus, output: dict | None = None, error: str | None = None) -> None:
-        state.status, state.finished_at, state.error = status, utcnow(), error
-        if output is not None:
-            state.output = output
-        self._runs.stage_states.update(state)

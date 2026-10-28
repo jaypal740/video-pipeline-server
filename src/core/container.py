@@ -11,6 +11,7 @@ from src.service.intake.preview_service import PreviewService
 from src.service.local.beat_service import BeatService
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.local.forced_align_service import ForcedAlignService
+from src.service.song.song_service import SongService
 
 
 class Container(containers.DeclarativeContainer):
@@ -36,9 +37,9 @@ class Container(containers.DeclarativeContainer):
     beat_service = providers.Singleton(BeatService, device=settings.provided.device)
 
     # services
+    song_service = providers.Singleton(SongService, song_repository=song_repository, settings=settings)
     intake_service = providers.Singleton(
         IntakeService,
-        run_repository=run_repository,
         song_repository=song_repository,
         ffmpeg=ffmpeg_service,
         aligner=forced_align_service,

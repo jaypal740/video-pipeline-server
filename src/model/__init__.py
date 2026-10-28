@@ -4,6 +4,7 @@ from src.model.base_model import Base, EntityMixin
 from src.model.run.run_model import RunRow
 from src.model.run.stage_state_model import StageStateRow
 from src.model.song.song_analysis_model import SongAnalysisRow
+from src.model.song.song_model import SongRow
 
 __all__ = [
     "AssetRow",
@@ -12,5 +13,6 @@ __all__ = [
     "EntityMixin",
     "RunRow",
     "SongAnalysisRow",
+    "SongRow",
     "StageStateRow",
 ]

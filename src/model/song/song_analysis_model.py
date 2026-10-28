@@ -1,4 +1,6 @@
-from sqlalchemy import JSON, Boolean, Float, String, Text
+from datetime import datetime
+
+from sqlalchemy import JSON, Boolean, DateTime, Float, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.model.base_model import Base, EntityMixin
@@ -20,3 +22,4 @@ class SongAnalysisRow(EntityMixin, Base):
     downbeats: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     beat_strength: Mapped[float] = mapped_column(Float, nullable=False)
     tool_versions: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
