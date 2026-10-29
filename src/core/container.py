@@ -18,6 +18,7 @@ from src.service.local.beat_service import BeatService
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.local.forced_align_service import ForcedAlignService
 from src.service.song.song_service import SongService
+from src.service.storyboard.storyboard_service import StoryboardService
 
 
 class Container(containers.DeclarativeContainer):
@@ -61,6 +62,14 @@ class Container(containers.DeclarativeContainer):
     preview_service = providers.Singleton(PreviewService, ffmpeg=ffmpeg_service)
     lesson_service = providers.Singleton(
         LessonService,
+        run_repository=run_repository,
+        song_repository=song_repository,
+        asset_repository=asset_repository,
+        llm=llm_service,
+        settings=settings,
+    )
+    storyboard_service = providers.Singleton(
+        StoryboardService,
         run_repository=run_repository,
         song_repository=song_repository,
         asset_repository=asset_repository,

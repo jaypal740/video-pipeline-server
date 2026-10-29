@@ -3,3 +3,6 @@ pick_when = "The song moves through times or places in order."
 world = "Show each time or place in order, linked by who or what is travelling."
 on_camera = "The same traveller or thing throughout."
 face_to_camera_share = 0.3
+shape = "One stop per time or place, in order, arriving and leaving."
+keep_same = "The same traveller or thing, travelling in the same screen direction."
+camera = "Follow the traveller; a wide shot on each arrival."

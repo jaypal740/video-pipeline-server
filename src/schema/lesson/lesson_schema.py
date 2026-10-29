@@ -39,16 +39,26 @@ class BandRules(BaseModel):
     face_to_camera_share: float
     on_screen_text: str
     avoid: list[str]
+    max_places: int
+    max_size_jump: int
+    camera_moves: list[str]
+    max_people_in_frame: int
+    max_camera_speed: str
 
 
 class FormatRules(BaseModel):
-    """One video type, from src/templates/format/<type>.toml. face_to_camera_share is enforced by code."""
+    """One video type, from src/templates/format/<type>.toml. face_to_camera_share is enforced by code.
+    shape, keep_same and camera guide the storyboard; max_scale_step limits how far one cut changes scale."""
 
     type: VideoType
     pick_when: str
     world: str
     on_camera: str
     face_to_camera_share: float
+    shape: str
+    keep_same: str
+    camera: str
+    max_scale_step: int | None = None
 
 
 class KeyTerm(BaseModel):

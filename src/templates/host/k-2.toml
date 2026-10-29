@@ -1,0 +1,7 @@
+# Draft look, waiting for approval. The host is the only one who sings to camera.
+band = "k-2"
+look = "A cheerful young woman with curly dark hair in a yellow headband, a teal dungaree dress over a white t-shirt, and red trainers."
+size = "an adult, about 1.7 m tall"
+# Where the host sings from; every sung shot happens here.
+place_look = "a bright classroom corner with a round yellow rug, a low bookshelf with picture books and a big window"
+place_lighting = "warm sunny daylight"

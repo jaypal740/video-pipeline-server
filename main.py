@@ -139,6 +139,24 @@ def run_lesson(
         typer.echo(f"  {line.index:3d}  {line.tag:14s}  {line.show[:90]}")
 
 
+@run_app.command("storyboard")
+def run_storyboard(
+    run_id: str,
+    model: str | None = typer.Option(None, "--model", help="Override the storyboard model."),
+    force: bool = typer.Option(False, "--force", help="Board again even if nothing changed."),
+) -> None:
+    """Stage 3: the shot list, cut on the beat, that the image and video models draw."""
+    board = container.storyboard_service().run(run_id, model=model, force=force)
+    typer.echo(f"{board.video_type}, grades {board.grade_band}: {board.shape}")
+    typer.echo(f"places: {', '.join(p.id for p in board.places)} | cast: {', '.join(c.id for c in board.cast)}")
+    for shot in board.shots:
+        cam = " ".join(str(v) for v in (shot.camera.move, shot.camera.direction, shot.camera.speed) if v)
+        typer.echo(f"  {shot.id} {shot.start:6.1f}-{shot.end:5.1f}  {shot.kind:10s} {shot.place:16s} {shot.size:13s} "
+                   f"{cam:18s} {shot.action[:60]}")
+    for flag in board.flags:
+        typer.echo(f"  note: {flag}")
+
+
 @run_app.command("list")
 def run_list() -> None:
     """Every run, oldest first."""

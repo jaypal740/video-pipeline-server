@@ -13,3 +13,4 @@ class Settings(BaseSettings):
     device: str = Field(default="cpu", validation_alias="PIPELINE_DEVICE")
     spend_cap_usd: float = Field(default=25.0, validation_alias="PIPELINE_SPEND_CAP_USD")
     lesson_model: str = Field(default="claude-opus-5-5", validation_alias="PIPELINE_LESSON_MODEL")
+    storyboard_model: str = Field(default="claude-opus-5-5", validation_alias="PIPELINE_STORYBOARD_MODEL")

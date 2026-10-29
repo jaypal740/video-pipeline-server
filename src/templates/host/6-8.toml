@@ -1,0 +1,7 @@
+# Draft look, waiting for approval. The host is the only one who sings to camera.
+band = "6-8"
+look = "A woman in her thirties with shoulder-length brown hair, a navy blazer over a plain white top, dark jeans and a silver watch."
+size = "an adult, about 1.7 m tall"
+# Where the host sings from; every sung shot happens here.
+place_look = "a small studio with a dark grey wall, a wooden desk, a shelf of books and one warm lamp"
+place_lighting = "soft warm key light from the left"

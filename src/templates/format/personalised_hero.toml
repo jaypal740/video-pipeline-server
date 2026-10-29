@@ -3,3 +3,6 @@ pick_when = "The song talks to the viewer directly, like a narrator."
 world = "A narrator guides the viewer, cutting to scenes of what they describe."
 on_camera = "The narrator on hooks and choruses; the scenes show the ideas."
 face_to_camera_share = 0.6
+shape = "The host opens, scenes show the ideas, the host returns on the chorus."
+keep_same = "The same host with the same look."
+camera = "Medium-close shots of the host facing the camera; the scenes in between follow the other rules."

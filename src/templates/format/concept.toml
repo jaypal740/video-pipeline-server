@@ -3,3 +3,7 @@ pick_when = "The song explains an idea: how or why something happens."
 world = "Show the idea working, step by logical step, so the viewer sees the cause and the effect."
 on_camera = "Whatever the idea is about; a presenter only on hook lines."
 face_to_camera_share = 0.25
+shape = "Start on what we can see, step down the scales to where it happens, show it working, step back out to why it matters."
+keep_same = "The same subject, at its real size."
+camera = "Push in and pull back between scales; a locked camera while the idea plays out."
+max_scale_step = 1
