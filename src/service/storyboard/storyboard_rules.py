@@ -23,12 +23,10 @@ _DIGIT = re.compile(r"\d")
 _NEGATIVE = re.compile(r"\b(no|not|without|never|none)\b", re.I)
 _TEXT = re.compile(r"\b(text|labels?|labell?ed|captions?|charts?|graphs?|diagrams?|lettering|writing|written|"
                    r"subtitles?|logos?|signage|signposts?|banners?|posters?)\b", re.I)
-# Singular face only (a prism has faces); "eye" next to a hyphen is "eye-level"; mouth and expression are left
-# out (river mouth, gene expression).
-_FACE = re.compile(r"\b(face|(?<!-)eyes?(?!-)|smil\w*|frown\w*|grin\w*|wink\w*|cartoon\w*|mascots?|cute)\b", re.I)
-# A face that is a surface, not a person: "the right face of the prism", "the rock face".
-_SURFACE_FACE = re.compile(r"\b(prism|glass|crystal|cube|cliff|rock|clock|dial|flat|polished|right|left|far|near|"
-                           r"front|back|top|bottom|side|each|every|one)\W+(?:\w+\W+)?face\b", re.I)
+# Only words that always mean a human-like face. "face" itself is left out (a prism, a dial and a cliff have
+# faces), as are mouth and expression (river mouth, gene expression); "eye" next to a hyphen is "eye-level".
+# A drawn face on a thing is caught for real by the keyframe stage's image check.
+_FACE = re.compile(r"\b((?<!-)eyes?(?!-)|smil\w*|frown\w*|grin\w*|wink\w*|cartoon\w*|mascots?|cute)\b", re.I)
 _BRIDGES = {Transition.DISSOLVE, Transition.MATCH_CUT}
 _ZOOMS = {CameraMove.PUSH_IN, CameraMove.PULL_BACK}
 
@@ -60,6 +58,8 @@ def host_place_for(band: GradeBand) -> Place:
 
 
 def _words(field: str, text: str, limit: int, faces_allowed: bool, digits_allowed: bool = False) -> list[str]:
+    """Word rules for one field. Digits are banned only in text that reaches an image prompt; a real size
+    ("about 90 metres") and the shape sentence never do."""
     found = []
     if len(text.split()) > limit:
         found.append(f"{field} has {len(text.split())} words; at most {limit}")
@@ -71,7 +71,7 @@ def _words(field: str, text: str, limit: int, faces_allowed: bool, digits_allowe
         found.append(f"{field} says {m.group(0)!r}; describe what is there instead, models draw what they read")
     if m := _TEXT.search(text):
         found.append(f"{field} mentions {m.group(0)!r}; pictures have no text, our code adds it")
-    if not faces_allowed and (m := _FACE.search(text)) and not (m.group(0).lower() == "face" and _SURFACE_FACE.search(text)):
+    if not faces_allowed and (m := _FACE.search(text)):
         found.append(f"{field} mentions {m.group(0)!r}; only people have faces and expressions")
     return found
 
@@ -83,7 +83,7 @@ def wanted(slots: list[Slot]) -> set[str]:
 
 def header_problems(draft: StoryboardDraft, band: BandRules, slots: list[Slot]) -> list[str]:
     """Problems with the cast, places, motifs and shape; any of these re-asks the whole board."""
-    found = _words("shape", draft.shape, LIMITS["shape"], faces_allowed=True)
+    found = _words("shape", draft.shape, LIMITS["shape"], faces_allowed=True, digits_allowed=True)
     ids = [c.id for c in draft.cast] + [p.id for p in draft.places]
     for bad in sorted({i for i in ids if not _ID.match(i) or ids.count(i) > 1}):
         found.append(f"id {bad!r} must be unique, lowercase letters, digits and underscores")

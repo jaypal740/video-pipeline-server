@@ -53,6 +53,9 @@ def test_header_rules():
     six = board(*[shot(f"s{i + 1:02d}", place=f"p{i}") for i in range(6)], cast=cast, places=places)
     found = header_problems(six, BAND, s)
     assert any("'host' is given" in p for p in found) and any("6 places used" in p for p in found)
+    dated = board(shot("s01", size=ShotSize.WIDE))
+    dated.shape = "From the 1858 cable to today"
+    assert header_problems(dated, BAND, slots(ShotKind.ILLUSTRATE)) == []       # the shape never reaches a picture
     assert not any("places used" in p for p in header_problems(board(shot("s01", place="p0"), places=places), BAND, s))
     ghost = board(*[shot(f"s{i + 1:02d}", place=f"p{i}") for i in range(5)], shot("s99", place="p5"), places=places)
     assert not any("places used" in p for p in header_problems(ghost, BAND, s))        # s99 is not a slot
@@ -153,7 +156,7 @@ def test_a_place_opened_by_a_sung_shot_still_needs_a_wide_picture_shot():
 
 
 def test_everyday_words_are_not_mistaken_for_faces_or_text():
-    fine = board(shot("s01", size=ShotSize.WIDE, start_state="An eye-level view of the right face of the prism",
+    fine = board(shot("s01", size=ShotSize.WIDE, start_state="An eye-level view of the face of the dial",
                       action="Nothing but a notebook falls", end_state="The ship cannot be seen past the cape"))
     assert shot_problems(fine, slots(ShotKind.ILLUSTRATE), BAND, FMT, HOST, STUDIO) == {}
     follow = board(shot("s01", size=ShotSize.WIDE, camera=Camera(move=CameraMove.FOLLOW, direction=Direction.UP)))

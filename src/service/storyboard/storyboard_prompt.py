@@ -4,7 +4,7 @@ from src.schema.storyboard.storyboard_schema import CastMember, Place, ShotKind,
 from src.service.storyboard.storyboard_rules import HOST, HOST_PLACE, LIMITS
 
 # Bumped whenever the prompt changes, so every run is boarded again with the new prompt.
-PROMPT_VERSION = "storyboard.v5"
+PROMPT_VERSION = "storyboard.v6"
 
 SYSTEM = f"""You storyboard short educational music videos for school classes. The song, its lesson plan \
 and the shot timings already exist; you decide what each shot shows and how the camera films it. An image \
@@ -54,8 +54,8 @@ viewer sees where we are; a sung close-up of the host does not count.
 - Within a place, keep the screen direction and change shot size gradually.
 - Lock the camera when the subject moves fast; keep the subject calm when the camera moves.
 - Number shots keep the main subject in a side third; the figure is drawn in the open side.
-- Sung shots are the host singing to camera from the host's own place ({HOST_PLACE}, given); code sets their \
-framing and place.
+- Write a shot for every slot you are given, sung slots included. In a sung shot the host sings to camera \
+from the host's own place ({HOST_PLACE}, given); code only adjusts its framing.
 - Lighting stays the same within a shot; show time passing with a cut or a dissolve, never inside one clip.
 - Follow the lesson's idea for each line; change it only when continuity needs it, and keep what it teaches.
 - Use few places and come back to them: the video should feel like one connected film, not a slideshow."""
