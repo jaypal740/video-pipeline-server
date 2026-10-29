@@ -73,10 +73,13 @@ class LlmService:
             call.input_tokens += reply.input_tokens
             call.output_tokens += reply.output_tokens
             call.cost_usd += reply.cost_usd
+            logger.info("%s attempt %d: %d in + %d out tokens, $%.4f", model, call.attempts, reply.input_tokens,
+                        reply.output_tokens, reply.cost_usd)
             problems = check(reply.output) if check else []
             if not problems:
                 return reply.output, call
-            logger.info("%s attempt %d: %d problems", model, call.attempts, len(problems))
+            logger.warning("%s attempt %d failed %d checks, asking again:\n%s", model, call.attempts,
+                           len(problems), "\n".join(f"  - {p}" for p in problems))
             prompt = (f"{user}\n\nYour previous answer was:\n{reply.output.model_dump_json()}\n\n"
                       "It has these problems. Return the whole answer again with every problem fixed:\n"
                       + "\n".join(f"- {p}" for p in problems))

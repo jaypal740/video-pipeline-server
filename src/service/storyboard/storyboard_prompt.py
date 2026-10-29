@@ -4,7 +4,7 @@ from src.schema.storyboard.storyboard_schema import CastMember, Place, ShotKind,
 from src.service.storyboard.storyboard_rules import HOST, HOST_PLACE, LIMITS
 
 # Bumped whenever the prompt changes, so every run is boarded again with the new prompt.
-PROMPT_VERSION = "storyboard.v4"
+PROMPT_VERSION = "storyboard.v5"
 
 SYSTEM = f"""You storyboard short educational music videos for school classes. The song, its lesson plan \
 and the shot timings already exist; you decide what each shot shows and how the camera films it. An image \
@@ -86,7 +86,9 @@ def user_prompt(plan: LessonPlan, lines: list[LyricLine], slots: list[Slot], ban
             f"{', '.join(band.camera_moves)}; camera speed at most {band.max_camera_speed}.\n\n"
             f"Video type: {fmt.type}. World: {fmt.world} On camera: {fmt.on_camera}\n"
             f"Shape: {fmt.shape} Keep the same: {fmt.keep_same} Camera: {fmt.camera}"
-            + (f" Scale changes at most {fmt.max_scale_step} step per cut." if fmt.max_scale_step else "")
+            + (f" A scale change of more than {fmt.max_scale_step} step between shots must carry the viewer: "
+               "come in on a dissolve or match_cut, or let the shot before push in or pull back."
+               if fmt.max_scale_step else "")
             + f"\n\nHost ({HOST}): {host.look} Size: {host.size}. Sings from {HOST_PLACE}: {host_place.look}, "
             f"{host_place.lighting}."
             + ("" if fmt.type == VideoType.PERSONALISED_HERO else " The host appears only in sung shots.")

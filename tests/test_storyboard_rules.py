@@ -90,14 +90,20 @@ def test_film_grammar_is_checked():
     assert "flips" in shot_problems(flip, slots(ShotKind.ILLUSTRATE, ShotKind.ILLUSTRATE), BAND, FMT, HOST, STUDIO)["s02"][0]
 
 
-def test_concept_videos_change_scale_one_step_at_a_time():
+def test_a_big_scale_jump_in_a_concept_video_must_be_bridged():
     places = [Place(id="ship_deck", look="A deck", lighting="day", scale=Scale.HUMAN),
               Place(id="seabed", look="A cell membrane", lighting="dim", scale=Scale.MICROSCOPIC)]
-    draft = board(shot("s01", size=ShotSize.WIDE), shot("s02", place="seabed", size=ShotSize.WIDE, subjects=[]),
-                  places=places)
-    found = shot_problems(draft, slots(ShotKind.ILLUSTRATE, ShotKind.ILLUSTRATE), BAND,
-                          format_rules(VideoType.CONCEPT), HOST, STUDIO)
-    assert "scale jumps 2 steps" in found["s02"][0]
+    s, fmt = slots(ShotKind.ILLUSTRATE, ShotKind.ILLUSTRATE), format_rules(VideoType.CONCEPT)
+    cut = board(shot("s01", size=ShotSize.WIDE), shot("s02", place="seabed", size=ShotSize.WIDE, subjects=[]),
+                places=places)
+    assert "scale jumps 2 steps" in shot_problems(cut, s, BAND, fmt, HOST, STUDIO)["s02"][0]
+    dissolve = board(shot("s01", size=ShotSize.WIDE), shot("s02", place="seabed", size=ShotSize.WIDE, subjects=[],
+                                                          transition_in=Transition.DISSOLVE), places=places)
+    assert shot_problems(dissolve, s, BAND, fmt, HOST, STUDIO) == {}
+    zoom = board(shot("s01", size=ShotSize.WIDE, camera=Camera(move=CameraMove.PUSH_IN)),
+                 shot("s02", place="seabed", size=ShotSize.WIDE, subjects=[]), places=places)
+    assert shot_problems(zoom, s, BAND, fmt, HOST, STUDIO) == {}
+    assert shot_problems(cut, s, BAND, FMT, HOST, STUDIO) == {}                 # journeys have no scale rule
 
 
 def test_shot_words_unknown_ids_and_missing_shots_are_caught():
@@ -108,7 +114,7 @@ def test_shot_words_unknown_ids_and_missing_shots_are_caught():
     text = " ".join(found["s01"])
     assert "['whale']" in text and "digits" in text and "needs a direction" in text
     assert found["s02"] == ["this slot has no shot"]
-    faces = board(shot("s01", size=ShotSize.WIDE, end_state="The ship looks happy with a smile"))
+    faces = board(shot("s01", size=ShotSize.WIDE, end_state="The ship has a happy face and a smile"))
     assert "only people" in shot_problems(faces, slots(ShotKind.ILLUSTRATE), BAND, FMT, HOST, STUDIO)["s01"][0]
 
 
@@ -147,7 +153,7 @@ def test_a_place_opened_by_a_sung_shot_still_needs_a_wide_picture_shot():
 
 
 def test_everyday_words_are_not_mistaken_for_faces_or_text():
-    fine = board(shot("s01", size=ShotSize.WIDE, start_state="An eye-level view of the river mouth",
+    fine = board(shot("s01", size=ShotSize.WIDE, start_state="An eye-level view of the right face of the prism",
                       action="Nothing but a notebook falls", end_state="The ship cannot be seen past the cape"))
     assert shot_problems(fine, slots(ShotKind.ILLUSTRATE), BAND, FMT, HOST, STUDIO) == {}
     follow = board(shot("s01", size=ShotSize.WIDE, camera=Camera(move=CameraMove.FOLLOW, direction=Direction.UP)))

@@ -8,7 +8,7 @@ from src.core.database import create_tables
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(_env_file=None, db_url="sqlite:///:memory:")
+    return Settings(_env_file=None, db_url="sqlite:///:memory:", log_dir=None)   # tests never write data/logs
 
 
 @pytest.fixture

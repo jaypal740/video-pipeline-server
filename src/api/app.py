@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from src.api.router import health_router, song_router
 from src.core.container import Container
 from src.core.database import create_tables
+from src.core.logging import configure_logging
 from src.service.auth.auth_service import InvalidApiKey, RevokedApiKey
 
 
@@ -15,6 +16,8 @@ def create_app(container: Container) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        settings = container.settings()
+        configure_logging(settings.log_level, settings.log_dir)
         create_tables(container.engine())
         yield
 

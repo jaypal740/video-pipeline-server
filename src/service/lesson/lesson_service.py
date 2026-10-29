@@ -46,7 +46,10 @@ class LessonService:
 
         state = self._runs.stage(run.id, StageName.LESSON)
         if state is not None and not force and state.status == StageStatus.DONE and state.input_hash == key:
+            logger.info("lesson %s: reused, inputs unchanged", run.id[:8])
             return LessonPlan(**state.output)
+        logger.info("lesson %s: %s, grades %s, %d lines, types %s", run.id[:8], model, band, len(lines),
+                    [str(t) for t in types])
         state = state or self._runs.stage_states.add(StageState(run_id=run.id, stage=StageName.LESSON))
         state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
         state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
@@ -69,8 +72,8 @@ class LessonService:
         plan = LessonPlan(**draft.model_dump(), grade_band=band, model=model, prompt_version=PROMPT_VERSION)
         state.status, state.output, state.finished_at = StageStatus.DONE, plan.model_dump(mode="json"), utcnow()
         self._runs.stage_states.update(state)
-        logger.info("lesson: %s, %d lines, $%.4f in %d attempts", plan.video_type, len(plan.lines),
-                    call.cost_usd, call.attempts)
+        logger.info("lesson %s: done, %s, %d lines, $%.4f in %d attempts, %.0fs", run.id[:8], plan.video_type,
+                    len(plan.lines), call.cost_usd, call.attempts, (state.finished_at - state.started_at).total_seconds())
         return plan
 
     def _run(self, run_id: str) -> Run:
@@ -94,3 +97,4 @@ class LessonService:
     def _fail(self, state: StageState, exc: Exception) -> None:
         state.status, state.error, state.finished_at = StageStatus.FAILED, str(exc) or type(exc).__name__, utcnow()
         self._runs.stage_states.update(state)
+        logger.error("lesson %s: failed: %s", state.run_id[:8], state.error)

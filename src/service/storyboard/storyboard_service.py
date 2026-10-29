@@ -23,7 +23,9 @@ from src.service.storyboard.storyboard_slots import make_slots
 
 logger = logging.getLogger(__name__)
 
-# Re-asks per storyboard, shared by the header and the shots; then the stage fails with the reasons.
+# Re-asks per storyboard: the whole board for cast, place and shape problems, then only the failing shots.
+# After that the stage fails with the reasons, keeping the draft for inspection.
+MAX_HEADER_REASKS = 1
 MAX_REASKS = 2
 
 
@@ -55,7 +57,11 @@ class StoryboardService:
 
         state = self._runs.stage(run.id, StageName.STORYBOARD)
         if state is not None and not force and state.status == StageStatus.DONE and state.input_hash == key:
+            logger.info("storyboard %s: reused, inputs unchanged", run.id[:8])
             return Storyboard(**state.output)
+        logger.info("storyboard %s: %s, grades %s, %s, %d slots (%d repeats), %d sung, %d number", run.id[:8], model,
+                    band.band, fmt.type, len(slots), sum(s.repeat_of is not None for s in slots),
+                    sum(s.kind == "sung" for s in slots), sum(s.kind == "number" for s in slots))
         state = state or self._runs.stage_states.add(StageState(run_id=run.id, stage=StageName.STORYBOARD))
         state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
         state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
@@ -64,20 +70,26 @@ class StoryboardService:
         try:
             draft, call = self._llm.parse(model, SYSTEM, prompt, StoryboardDraft,
                                           check=lambda d: header_problems(d, band, slots),
-                                          max_attempts=1 + MAX_REASKS)
+                                          max_attempts=1 + MAX_HEADER_REASKS)
             spent += self._log_cost(run.id, call)
-            reasks = call.attempts - 1
+            reasks = 0
             problems = self._checked(draft, slots, band, fmt, host, host_place)
             while problems and reasks < MAX_REASKS:
                 reasks += 1
-                logger.info("storyboard: re-asking %d shots", len(problems))
+                logger.warning("storyboard %s: re-ask %d for %s:\n%s", run.id[:8], reasks, sorted(problems),
+                               "\n".join(f"  - {slot_id}: {p}" for slot_id, found in sorted(problems.items())
+                                         for p in found))
                 patch, call = self._llm.parse(model, SYSTEM, patch_prompt(prompt, draft, problems), ShotPatch,
                                               max_attempts=1)
                 spent += self._log_cost(run.id, call)
+                logger.info("storyboard %s: re-ask %d returned %s", run.id[:8], reasks,
+                            sorted(s.slot for s in patch.shots))
                 patched = {s.slot: s for s in patch.shots if s.slot in problems}
-                draft.shots = [s for s in draft.shots if s.slot not in problems] + list(patched.values())
+                draft.shots = sorted([s for s in draft.shots if s.slot not in problems] + list(patched.values()),
+                                     key=lambda s: s.slot)
                 problems = self._checked(draft, slots, band, fmt, host, host_place)
             if problems:
+                state.output = {"draft": draft.model_dump(mode="json"), "problems": problems}
                 raise ValueError(f"storyboard still has problems after {MAX_REASKS} re-asks: " + "; ".join(
                     f"{slot_id}: {', '.join(found)}" for slot_id, found in sorted(problems.items())))
             header = header_problems(draft, band, slots)              # 13: a patch may have moved a shot
@@ -100,19 +112,29 @@ class StoryboardService:
                            flags=flags, model=model, prompt_version=PROMPT_VERSION)
         state.status, state.output, state.finished_at = StageStatus.DONE, board.model_dump(mode="json"), utcnow()
         self._runs.stage_states.update(state)
-        logger.info("storyboard: %d shots, %d places, $%.4f, %d re-asks", len(shots), len(board.places), spent,
-                    reasks)
+        logger.info("storyboard %s: done, %d shots, %d places, %d cast, $%.4f, %d re-asks, %.0fs", run.id[:8],
+                    len(shots), len(board.places), len(board.cast), spent, reasks,
+                    (state.finished_at - state.started_at).total_seconds())
+        for flag in flags:
+            logger.info("storyboard %s: note %s", run.id[:8], flag)
         return board
 
     def _checked(self, draft: StoryboardDraft, slots: list[Slot], band: BandRules, fmt: FormatRules,
                  host: CastMember, host_place: Place) -> dict[str, list[str]]:
         """Code's fixes, then what is still wrong, per slot."""
         by_id = {s.id: s for s in slots}
+        dropped = sorted({s.slot for s in draft.shots} - wanted(slots))
+        if dropped:
+            logger.warning("storyboard: dropped shots for slots that are not to be written: %s", dropped)
         draft.shots = [s for s in draft.shots if s.slot in wanted(slots)]
         people = {c.id for c in draft.cast if c.kind == CastKind.PERSON}
         for shot in draft.shots:
-            fix(shot, by_id[shot.slot], band, people)
-        return shot_problems(draft, slots, band, fmt, host, host_place)
+            for change in fix(shot, by_id[shot.slot], band, people):
+                logger.info("storyboard: code fixed %s", change)
+        problems = shot_problems(draft, slots, band, fmt, host, host_place)
+        logger.info("storyboard: checks found %d problems in %d shots", sum(len(v) for v in problems.values()),
+                    len(problems))
+        return problems
 
     def _run(self, run_id: str) -> Run:
         run = self._runs.runs.get(run_id)
@@ -142,3 +164,4 @@ class StoryboardService:
     def _fail(self, state: StageState, exc: Exception) -> None:
         state.status, state.error, state.finished_at = StageStatus.FAILED, str(exc) or type(exc).__name__, utcnow()
         self._runs.stage_states.update(state)
+        logger.error("storyboard %s: failed: %s", state.run_id[:8], state.error)

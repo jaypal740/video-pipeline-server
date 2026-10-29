@@ -48,7 +48,8 @@ class BandRules(BaseModel):
 
 class FormatRules(BaseModel):
     """One video type, from src/templates/format/<type>.toml. face_to_camera_share is enforced by code.
-    shape, keep_same and camera guide the storyboard; max_scale_step limits how far one cut changes scale."""
+    shape, keep_same and camera guide the storyboard; a scale change of more than max_scale_step between
+    shots must be bridged by a dissolve, a match cut or a zoom."""
 
     type: VideoType
     pick_when: str

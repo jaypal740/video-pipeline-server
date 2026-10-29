@@ -102,6 +102,8 @@ def test_it_gives_up_after_two_re_asks_and_records_the_reasons(container, run):
         storyboard(container, claude).run(run.id)
     state = container.run_repository().stage(run.id, StageName.STORYBOARD)
     assert state.status == StageStatus.FAILED and "label" in state.error
+    assert [s["slot"] for s in state.output["draft"]["shots"]] == ["s01", "s02", "s03"]            # kept to inspect
+    assert "s02" in state.output["problems"]
     assert container.asset_repository().run_cost(run.id) == pytest.approx(0.15)
 
 

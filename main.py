@@ -4,6 +4,7 @@ import typer
 import uvicorn
 
 from src.core.container import Container
+from src.core.logging import configure_logging
 from src.core.database import create_tables
 from src.schema.lesson.lesson_schema import VideoType
 from src.schema.run.run_schema import Run
@@ -21,6 +22,12 @@ app.add_typer(run_app, name="run")
 app.add_typer(key_app, name="key")
 
 container = Container()
+
+
+@app.callback()
+def main() -> None:
+    settings = container.settings()
+    configure_logging(settings.log_level, settings.log_dir)
 
 
 @db_app.command("init")

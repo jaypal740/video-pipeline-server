@@ -4,7 +4,7 @@ import tomllib
 from src.schema.lesson.lesson_schema import BandRules, FormatRules, GradeBand, VideoType
 from src.schema.storyboard.storyboard_schema import (Angle, CameraMove, CastKind, CastMember, Continuity, Direction,
                                                      Motion, Place, Position, Scale, ScreenDirection, Shot, ShotDraft,
-                                                     ShotKind, ShotSize, Slot, Speed, StoryboardDraft)
+                                                     ShotKind, ShotSize, Slot, Speed, StoryboardDraft, Transition)
 from src.service.lesson.lesson_rules import TEMPLATES
 
 HOST = "host"
@@ -23,8 +23,14 @@ _DIGIT = re.compile(r"\d")
 _NEGATIVE = re.compile(r"\b(no|not|without|never|none)\b", re.I)
 _TEXT = re.compile(r"\b(text|labels?|labell?ed|captions?|charts?|graphs?|diagrams?|lettering|writing|written|"
                    r"subtitles?|logos?|signage|signposts?|banners?|posters?)\b", re.I)
-# "eye" next to a hyphen is "eye-level"; mouth and expression are left out (river mouth, gene expression).
-_FACE = re.compile(r"\b(faces?|(?<!-)eyes?(?!-)|smil\w*|frown\w*|grin\w*|wink\w*|cartoon\w*|mascots?|cute)\b", re.I)
+# Singular face only (a prism has faces); "eye" next to a hyphen is "eye-level"; mouth and expression are left
+# out (river mouth, gene expression).
+_FACE = re.compile(r"\b(face|(?<!-)eyes?(?!-)|smil\w*|frown\w*|grin\w*|wink\w*|cartoon\w*|mascots?|cute)\b", re.I)
+# A face that is a surface, not a person: "the right face of the prism", "the rock face".
+_SURFACE_FACE = re.compile(r"\b(prism|glass|crystal|cube|cliff|rock|clock|dial|flat|polished|right|left|far|near|"
+                           r"front|back|top|bottom|side|each|every|one)\W+(?:\w+\W+)?face\b", re.I)
+_BRIDGES = {Transition.DISSOLVE, Transition.MATCH_CUT}
+_ZOOMS = {CameraMove.PUSH_IN, CameraMove.PULL_BACK}
 
 _SIZES = list(ShotSize)
 _SCALES = list(Scale)
@@ -65,7 +71,7 @@ def _words(field: str, text: str, limit: int, faces_allowed: bool, digits_allowe
         found.append(f"{field} says {m.group(0)!r}; describe what is there instead, models draw what they read")
     if m := _TEXT.search(text):
         found.append(f"{field} mentions {m.group(0)!r}; pictures have no text, our code adds it")
-    if not faces_allowed and (m := _FACE.search(text)):
+    if not faces_allowed and (m := _FACE.search(text)) and not (m.group(0).lower() == "face" and _SURFACE_FACE.search(text)):
         found.append(f"{field} mentions {m.group(0)!r}; only people have faces and expressions")
     return found
 
@@ -101,9 +107,11 @@ def header_problems(draft: StoryboardDraft, band: BandRules, slots: list[Slot]) 
     return found
 
 
-def fix(shot: ShotDraft, slot: Slot, band: BandRules, people: set[str]) -> None:
+def fix(shot: ShotDraft, slot: Slot, band: BandRules, people: set[str]) -> list[str]:
     """What code corrects itself instead of re-asking: camera details, and the framing sung and number
-    shots need. A sung shot shows one face for lip-sync: the host, with at most one thing."""
+    shots need. A sung shot shows one face for lip-sync: the host, with at most one thing. Returns what
+    changed, for the log."""
+    before = shot.model_dump(mode="json")
     cam = shot.camera
     if cam.move not in band.camera_moves:
         cam.move = CameraMove.STATIC
@@ -122,13 +130,15 @@ def fix(shot: ShotDraft, slot: Slot, band: BandRules, people: set[str]) -> None:
         cam.direction = None
     if cam.move == CameraMove.STATIC:
         cam.speed = None
-        return
-    cam.speed = cam.speed or Speed.SLOW
-    if cam.speed == Speed.FAST and shot.motion == Motion.HIGH:
-        cam.speed = Speed.SLOW
-    limit = _SPEEDS.index(Speed(band.max_camera_speed))
-    if _SPEEDS.index(cam.speed) > limit:
-        cam.speed = _SPEEDS[limit]
+    else:
+        cam.speed = cam.speed or Speed.SLOW
+        if cam.speed == Speed.FAST and shot.motion == Motion.HIGH:
+            cam.speed = Speed.SLOW
+        limit = _SPEEDS.index(Speed(band.max_camera_speed))
+        if _SPEEDS.index(cam.speed) > limit:
+            cam.speed = _SPEEDS[limit]
+    after = shot.model_dump(mode="json")
+    return [f"{slot.id}: {field} {before[field]!r} -> {after[field]!r}" for field in after if before[field] != after[field]]
 
 
 def timeline(draft: StoryboardDraft, slots: list[Slot]) -> list[tuple[Slot, ShotDraft | None]]:
@@ -209,9 +219,11 @@ def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fm
                              "the same place; keep it or put a neutral shot between")
         elif fmt.max_scale_step is not None and prev.place in places and shot.place in places:
             step = abs(_SCALES.index(places[shot.place].scale) - _SCALES.index(places[prev.place].scale))
-            if step > fmt.max_scale_step:
+            bridged = shot.transition_in in _BRIDGES or prev.camera.move in _ZOOMS
+            if step > fmt.max_scale_step and not bridged:
                 add(slot.id, f"scale jumps {step} steps from {places[prev.place].scale} to "
-                             f"{places[shot.place].scale}; at most {fmt.max_scale_step} per cut")
+                             f"{places[shot.place].scale} on a plain cut; bring the viewer with it: come in on a "
+                             "dissolve or match_cut, or let the shot before push in or pull back")
     return found
 
 
