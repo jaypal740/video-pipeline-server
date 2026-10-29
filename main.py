@@ -6,7 +6,7 @@ import uvicorn
 from src.core.container import Container
 from src.core.logging import configure_logging
 from src.core.database import create_tables
-from src.schema.lesson.lesson_schema import VideoType
+from src.schema.lesson.lesson_schema import GradeBand, VideoType
 from src.schema.run.run_schema import Run
 from src.schema.song.song_schema import SongStatus
 from src.service.lesson.lesson_rules import band_for
@@ -16,10 +16,12 @@ db_app = typer.Typer(no_args_is_help=True, help="Database commands.")
 song_app = typer.Typer(no_args_is_help=True, help="Songs: add one, analyse it (stage 1 intake), check it.")
 run_app = typer.Typer(no_args_is_help=True, help="Video runs made from an analysed song.")
 key_app = typer.Typer(no_args_is_help=True, help="API keys products call the server with.")
+host_app = typer.Typer(no_args_is_help=True, help="The fixed host of each grade band: draw candidates, approve one.")
 app.add_typer(db_app, name="db")
 app.add_typer(song_app, name="song")
 app.add_typer(run_app, name="run")
 app.add_typer(key_app, name="key")
+app.add_typer(host_app, name="host")
 
 container = Container()
 
@@ -162,6 +164,42 @@ def run_storyboard(
                    f"{cam:18s} {shot.action[:60]}")
     for flag in board.flags:
         typer.echo(f"  note: {flag}")
+
+
+@run_app.command("sheets")
+def run_sheets(
+    run_id: str,
+    force: bool = typer.Option(False, "--force", help="Draw again even if nothing changed."),
+) -> None:
+    """Stage 4a: one reference sheet per cast member and place, drawn in the band's style and checked."""
+    sheets = container.sheet_service().run(run_id, force=force)
+    for target, views in sheets.items():
+        for view, asset in views.items():
+            typer.echo(f"  {target:18s} {view:14s} {asset.review:12s} {asset.path}"
+                       + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
+
+
+@host_app.command("draw")
+def host_draw(band: GradeBand, count: int = typer.Option(3, "--count", help="How many candidates to draw.")) -> None:
+    """Draw candidate front views of a band's host from its description. Pick one with `host approve`."""
+    for asset in container.sheet_service().host_candidates(band, count):
+        typer.echo(f"  {asset.id}  candidate {asset.params['candidate']}  {asset.path}  ${asset.cost_usd:.3f}")
+
+
+@host_app.command("approve")
+def host_approve(band: GradeBand, asset_id: str) -> None:
+    """Keep this candidate as the band's host, then draw its other views and its place."""
+    for asset in container.sheet_service().approve_host(band, asset_id):
+        typer.echo(f"  {asset.params['view']:14s} {asset.review:12s} {asset.path}")
+
+
+@host_app.command("show")
+def host_show(band: GradeBand) -> None:
+    """The band's host images and their review state."""
+    assets = container.asset_repository().assets.list(run_id=None)
+    for asset in sorted((a for a in assets if a.target_id and a.target_id.startswith(f"host:{band}:")),
+                        key=lambda a: a.created_at):
+        typer.echo(f"  {asset.id}  {asset.params.get('view', ''):14s} {asset.review:12s} {asset.path}")
 
 
 @run_app.command("list")

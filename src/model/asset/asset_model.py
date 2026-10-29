@@ -7,7 +7,7 @@ from src.model.base_model import Base, EntityMixin
 class AssetRow(EntityMixin, Base):
     __tablename__ = "assets"
 
-    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), nullable=False, index=True)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"), index=True)
     stage: Mapped[str] = mapped_column(String(32), nullable=False)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     path: Mapped[str] = mapped_column(Text, nullable=False)
@@ -21,3 +21,5 @@ class AssetRow(EntityMixin, Base):
     prompt: Mapped[str | None] = mapped_column(Text)
     params: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     cost_usd: Mapped[float | None] = mapped_column(Float)
+    review: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    review_notes: Mapped[str | None] = mapped_column(Text)

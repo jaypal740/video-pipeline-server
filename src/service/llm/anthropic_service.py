@@ -1,8 +1,10 @@
+import base64
+
 import anthropic
 from pydantic import BaseModel
 
 from src.service.llm.llm_prices import PRICES, price_of
-from src.service.llm.llm_service import LlmRefusal, ProviderReply
+from src.service.llm.llm_service import LabelledImage, LlmRefusal, ProviderReply
 
 MAX_TOKENS = 16000
 # Server-side refusal fallback: if a safety classifier declines, the API re-runs the request on a model it
@@ -21,9 +23,21 @@ class AnthropicService:
         self._client: anthropic.Anthropic | None = None
 
     def parse(self, model: str, system: str, user: str, output_type: type[BaseModel], effort: str) -> ProviderReply:
+        return self._parse(model, system, [{"role": "user", "content": user}], output_type, effort)
+
+    def inspect(self, model: str, system: str, user: str, images: list[LabelledImage],
+                output_type: type[BaseModel]) -> ProviderReply:
+        content = []
+        for i, image in enumerate(images, start=1):
+            content.append({"type": "text", "text": f"Image {i}: {image.label}"})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": image.media_type,
+                                                        "data": base64.b64encode(image.data).decode()}})
+        content.append({"type": "text", "text": user})
+        return self._parse(model, system, [{"role": "user", "content": content}], output_type, "low")
+
+    def _parse(self, model: str, system: str, messages: list, output_type: type[BaseModel], effort: str) -> ProviderReply:
         response = self._get_client().beta.messages.parse(
-            model=model, max_tokens=MAX_TOKENS, system=system,
-            messages=[{"role": "user", "content": user}], output_format=output_type,
+            model=model, max_tokens=MAX_TOKENS, system=system, messages=messages, output_format=output_type,
             output_config={"effort": effort}, betas=[FALLBACK_BETA], fallbacks="default")
         if response.stop_reason == "refusal":
             details = response.stop_details

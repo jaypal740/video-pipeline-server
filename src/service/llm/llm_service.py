@@ -42,10 +42,21 @@ class LlmRefusal(Exception):
     """The model declined; raised by a provider and never retried."""
 
 
+class LabelledImage(BaseModel):
+    """One picture for a vision call, introduced as "Image N: label" the way the Claude docs recommend."""
+
+    label: str
+    data: bytes
+    media_type: str = "image/png"
+
+
 class LlmProvider(Protocol):
     name: str
 
     def parse(self, model: str, system: str, user: str, output_type: type[BaseModel], effort: str) -> ProviderReply: ...
+
+    def inspect(self, model: str, system: str, user: str, images: list[LabelledImage],
+                output_type: type[BaseModel]) -> ProviderReply: ...
 
 
 class LlmService:
@@ -84,3 +95,18 @@ class LlmService:
                       "It has these problems. Return the whole answer again with every problem fixed:\n"
                       + "\n".join(f"- {p}" for p in problems))
         raise LlmError(f"{model} gave no valid answer in {max_attempts} attempts: " + "; ".join(problems), call)
+
+    def inspect(self, model: str, system: str, user: str, images: list[LabelledImage],
+                output_type: type[T]) -> tuple[T, LlmCall]:
+        """One vision call: the model reads the labelled images and answers in the given shape."""
+        price_of(model)
+        provider = self._anthropic if model.startswith("claude-") else self._openai
+        call = LlmCall(provider=provider.name, model=model, attempts=1)
+        try:
+            reply = provider.inspect(model, system, user, images, output_type)
+        except LlmRefusal as exc:
+            raise LlmError(f"{model} refused: {exc}", call) from exc
+        call.input_tokens, call.output_tokens, call.cost_usd = reply.input_tokens, reply.output_tokens, reply.cost_usd
+        logger.info("%s inspect: %d images, %d in + %d out tokens, $%.4f", model, len(images), reply.input_tokens,
+                    reply.output_tokens, reply.cost_usd)
+        return reply.output, call

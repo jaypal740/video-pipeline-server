@@ -8,6 +8,8 @@ from src.repository.auth.auth_repository import AuthRepository
 from src.repository.run.run_repository import RunRepository
 from src.repository.song.song_repository import SongRepository
 from src.service.auth.auth_service import AuthService
+from src.service.image.fal_image_service import FalImageService
+from src.service.image.image_check_service import ImageCheckService
 from src.service.intake.intake_service import IntakeService
 from src.service.intake.preview_service import PreviewService
 from src.service.lesson.lesson_service import LessonService
@@ -17,7 +19,9 @@ from src.service.llm.openai_service import OpenAiService
 from src.service.local.beat_service import BeatService
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.local.forced_align_service import ForcedAlignService
+from src.service.sheet.sheet_service import SheetService
 from src.service.song.song_service import SongService
+from src.service.storage.storage_service import LocalStorage, R2Storage
 from src.service.storyboard.storyboard_service import StoryboardService
 
 
@@ -44,10 +48,22 @@ class Container(containers.DeclarativeContainer):
     forced_align_service = providers.Singleton(ForcedAlignService, device=settings.provided.device)
     beat_service = providers.Singleton(BeatService, device=settings.provided.device)
 
+    # storage: local files for development and tests, R2 in production
+    storage = providers.Selector(
+        settings.provided.storage,
+        local=providers.Singleton(LocalStorage, root=settings.provided.asset_dir),
+        r2=providers.Singleton(R2Storage, account_id=settings.provided.r2_account_id,
+                               access_key_id=settings.provided.r2_access_key_id,
+                               secret_access_key=settings.provided.r2_secret_access_key,
+                               bucket=settings.provided.r2_bucket),
+    )
+
     # model providers
     openai_service = providers.Singleton(OpenAiService, api_key=settings.provided.openai_api_key)
     anthropic_service = providers.Singleton(AnthropicService, api_key=settings.provided.claude_api_key)
     llm_service = providers.Singleton(LlmService, openai=openai_service, anthropic=anthropic_service)
+    fal_image_service = providers.Singleton(FalImageService, api_key=settings.provided.fal_key)
+    image_check_service = providers.Singleton(ImageCheckService, llm=llm_service, settings=settings)
 
     # services
     auth_service = providers.Singleton(AuthService, auth_repository=auth_repository)
@@ -74,5 +90,14 @@ class Container(containers.DeclarativeContainer):
         song_repository=song_repository,
         asset_repository=asset_repository,
         llm=llm_service,
+        settings=settings,
+    )
+    sheet_service = providers.Singleton(
+        SheetService,
+        run_repository=run_repository,
+        asset_repository=asset_repository,
+        storage=storage,
+        images=fal_image_service,
+        check=image_check_service,
         settings=settings,
     )

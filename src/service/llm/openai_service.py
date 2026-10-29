@@ -2,7 +2,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from src.service.llm.llm_prices import price_of
-from src.service.llm.llm_service import LlmRefusal, ProviderReply
+from src.service.llm.llm_service import LabelledImage, LlmRefusal, ProviderReply
 
 
 class OpenAiService:
@@ -14,6 +14,10 @@ class OpenAiService:
     def __init__(self, api_key: str | None) -> None:
         self._api_key = api_key
         self._client: OpenAI | None = None
+
+    def inspect(self, model: str, system: str, user: str, images: list[LabelledImage],
+                output_type: type[BaseModel]) -> ProviderReply:
+        raise NotImplementedError("image checks through OpenAI are not wired yet; use a claude-* model")
 
     def parse(self, model: str, system: str, user: str, output_type: type[BaseModel], effort: str) -> ProviderReply:
         response = self._get_client().responses.parse(
