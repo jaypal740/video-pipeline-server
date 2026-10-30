@@ -1,7 +1,11 @@
-# Draft look, waiting for approval. The host is the only one who sings to camera.
+# The band's host: a fixed person (face, hair, body) with a wardrobe of outfit kits; the storyboard picks the kit
+# that fits each video. Looks are drafts until a person approves the drawn host.
 band = "6-8"
-look = "A woman in her thirties with shoulder-length brown hair, a navy blazer over a plain white top, dark jeans and a silver watch."
-size = "an adult, about 1.7 m tall"
-# Where the host sings from; every sung shot happens here.
-place_look = "a small studio with a dark grey wall, a wooden desk, a shelf of books and one warm lamp"
-place_lighting = "soft warm key light from the left"
+look = "a friendly fifteen-year-old boy with deep brown skin, a short high-top fade with a sharp line-up, bright eager eyes and a wide confident grin"
+size = "a teenager, about 1.6 m tall"
+
+[wardrobe]
+everyday = "a navy crewneck sweater over a white collared shirt, grey chinos and plain white canvas shoes"
+science_club = "a white lab coat over a navy crewneck sweater, grey chinos, plain white canvas shoes and safety glasses pushed up on his head"
+explorer = "an olive field jacket with rolled sleeves over a grey t-shirt, dark jeans, brown boots and a compass pendant"
+maker = "a mustard sweatshirt with the sleeves pushed up, dark rolled jeans, plain yellow canvas shoes and a canvas tool belt"

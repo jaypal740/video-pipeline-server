@@ -8,7 +8,6 @@ from src.schema.storyboard.storyboard_schema import (Angle, CameraMove, CastKind
 from src.service.lesson.lesson_rules import TEMPLATES
 
 HOST = "host"
-HOST_PLACE = "host_place"
 # A subject may sit this many scale rungs away from its place (a ship on the open sea, a cable on the seabed).
 SCALE_FIT = 2
 # Word limits keep the image and video prompts built from these fields short.
@@ -45,16 +44,23 @@ _FLIPS = {(ScreenDirection.LEFT_TO_RIGHT, ScreenDirection.RIGHT_TO_LEFT),
 
 
 def host_for(band: GradeBand) -> CastMember:
-    """The band's fixed host, from src/templates/host/<band>.toml: the only one who sings to camera."""
+    """The band's fixed host, from src/templates/host/<band>.toml: the person (face, hair, body) without
+    clothes; the clothes come from the wardrobe kit a video picks."""
     data = tomllib.loads((TEMPLATES / "host" / f"{band}.toml").read_text())
     return CastMember(id=HOST, kind=CastKind.PERSON, look=data["look"], size=data["size"], scale=Scale.HUMAN)
 
 
-def host_place_for(band: GradeBand) -> Place:
-    """Where the host sings from. Every sung shot happens here, so the host is never put somewhere a
-    person cannot stand, and lip-sync always sees the same background."""
-    data = tomllib.loads((TEMPLATES / "host" / f"{band}.toml").read_text())
-    return Place(id=HOST_PLACE, look=data["place_look"], lighting=data["place_lighting"], scale=Scale.HUMAN)
+def wardrobe_for(band: GradeBand) -> dict[str, str]:
+    """The band's outfit kits by name."""
+    return tomllib.loads((TEMPLATES / "host" / f"{band}.toml").read_text())["wardrobe"]
+
+
+def host_in(band: GradeBand, kit: str) -> CastMember:
+    """The host dressed in one wardrobe kit, as drawn."""
+    host, wardrobe = host_for(band), wardrobe_for(band)
+    if kit not in wardrobe:
+        raise ValueError(f"grades {band} have no wardrobe kit {kit!r}; kits: {sorted(wardrobe)}")
+    return host.model_copy(update={"look": f"{host.look}, wearing {wardrobe[kit]}"})
 
 
 def _words(field: str, text: str, limit: int, faces_allowed: bool, digits_allowed: bool = False) -> list[str]:
@@ -82,14 +88,16 @@ def wanted(slots: list[Slot]) -> set[str]:
 
 
 def header_problems(draft: StoryboardDraft, band: BandRules, slots: list[Slot]) -> list[str]:
-    """Problems with the cast, places, motifs and shape; any of these re-asks the whole board."""
+    """Problems with the cast, places, motifs, shape and outfit; any of these re-asks the whole board."""
     found = _words("shape", draft.shape, LIMITS["shape"], faces_allowed=True, digits_allowed=True)
+    wardrobe = wardrobe_for(band.band)
+    if draft.host_outfit not in wardrobe:
+        found.append(f"host_outfit must be one of {sorted(wardrobe)}")
     ids = [c.id for c in draft.cast] + [p.id for p in draft.places]
     for bad in sorted({i for i in ids if not _ID.match(i) or ids.count(i) > 1}):
         found.append(f"id {bad!r} must be unique, lowercase letters, digits and underscores")
-    for given in (HOST, HOST_PLACE):
-        if given in ids:
-            found.append(f"{given!r} is given; do not declare it in cast or places")
+    if HOST in ids:
+        found.append(f"{HOST!r} is given; do not declare it in cast or places")
     for c in draft.cast:
         found += _words(f"cast {c.id} look", c.look, LIMITS["cast look"], faces_allowed=c.kind == CastKind.PERSON)
         found += _words(f"cast {c.id} size", c.size, LIMITS["size"], faces_allowed=True, digits_allowed=True)
@@ -116,7 +124,6 @@ def fix(shot: ShotDraft, slot: Slot, band: BandRules, people: set[str]) -> list[
     if cam.move not in band.camera_moves:
         cam.move = CameraMove.STATIC
     if slot.kind == ShotKind.SUNG:
-        shot.place = HOST_PLACE
         shot.subjects = [HOST] + [s for s in shot.subjects if s != HOST and s not in people][:1]
         shot.angle, shot.position, shot.motion = Angle.EYE, Position.CENTRE, Motion.LOW
         shot.screen_direction = ScreenDirection.NONE
@@ -148,7 +155,7 @@ def timeline(draft: StoryboardDraft, slots: list[Slot]) -> list[tuple[Slot, Shot
 
 
 def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fmt: FormatRules,
-                  host: CastMember, host_place: Place) -> dict[str, list[str]]:
+                  host: CastMember) -> dict[str, list[str]]:
     """Problems per slot id; only those shots are re-asked."""
     found: dict[str, list[str]] = {}
 
@@ -156,7 +163,7 @@ def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fm
         found.setdefault(slot_id, []).append(problem)
 
     cast = {c.id: c for c in draft.cast + [host]}
-    places = {p.id: p for p in draft.places + [host_place]}
+    places = {p.id: p for p in draft.places}
     written = [s.slot for s in draft.shots]
     for slot_id in sorted(wanted(slots) - set(written)):
         add(slot_id, "this slot has no shot")
@@ -169,6 +176,8 @@ def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fm
             continue
         if shot.place not in places:
             add(slot.id, f"place {shot.place!r} is not in places")
+        elif slot.kind == ShotKind.SUNG and not places[shot.place].walkable:
+            add(slot.id, f"a sung shot needs a place where a person can really stand; {shot.place!r} is not walkable")
         unknown = [s for s in shot.subjects if s not in cast]
         if unknown:
             add(slot.id, f"subjects {unknown} are not in cast")

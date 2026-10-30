@@ -1,10 +1,11 @@
 import logging
+import time
 
 import fal_client
 import httpx
 from pydantic import BaseModel
 
-from src.service.image.image_prices import image_model
+from src.service.image.image_prices import GPT_IMAGE_QUALITY, GPT_IMAGE_SIZES, image_model
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ class ImageReply(BaseModel):
     model: str
     seed: int | None
     cost_usd: float
+    seconds: float = 0.0
 
 
 class FalImageService:
@@ -34,21 +36,29 @@ class FalImageService:
     def generate(self, model: str, prompt: str, refs: list[str], aspect: str, seed: int | None,
                  thinking: str = "medium") -> ImageReply:
         spec = image_model(model)
-        arguments = {"prompt": prompt, "num_images": 1, "aspect_ratio": aspect, "resolution": RESOLUTION,
-                     "output_format": "png", "thinking_level": thinking}
-        if seed is not None:
-            arguments["seed"] = seed
+        if spec.family == "gpt_image":
+            width, height = GPT_IMAGE_SIZES[aspect]
+            arguments = {"prompt": prompt, "num_images": 1, "image_size": {"width": width, "height": height},
+                         "quality": GPT_IMAGE_QUALITY, "output_format": "png"}
+            seed = None                                          # GPT Image has no seed
+        else:
+            arguments = {"prompt": prompt, "num_images": 1, "aspect_ratio": aspect, "resolution": RESOLUTION,
+                         "output_format": "png", "thinking_level": spec.thinking(thinking)}
+            if seed is not None:
+                arguments["seed"] = seed
         if refs:
             arguments["image_urls"] = refs
         endpoint = spec.edit if refs else spec.generate
+        started = time.monotonic()
         result = self._get_client().subscribe(endpoint, arguments=arguments, with_logs=False,
                                               client_timeout=TIMEOUT_S)
         image = result["images"][0]
         data = httpx.get(image["url"], timeout=60).content
-        cost = spec.prices[RESOLUTION] + spec.per_reference * len(refs)
-        logger.info("fal %s: %s, %d refs, seed %s, $%.3f", model, aspect, len(refs), seed, cost)
+        seconds = round(time.monotonic() - started, 1)
+        cost = spec.prices[aspect if spec.family == "gpt_image" else RESOLUTION] + spec.per_reference * len(refs)
+        logger.info("fal %s: %s, %d refs, seed %s, $%.3f, %.1fs", model, aspect, len(refs), seed, cost, seconds)
         return ImageReply(data=data, content_type=image.get("content_type") or "image/png", model=model,
-                          seed=result.get("seed", seed), cost_usd=cost)
+                          seed=result.get("seed", seed), cost_usd=cost, seconds=seconds)
 
     def upload(self, data: bytes, content_type: str) -> str:
         """A short-lived fal URL for bytes that live in local storage."""

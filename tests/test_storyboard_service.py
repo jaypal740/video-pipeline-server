@@ -24,11 +24,11 @@ def shot(slot, size="medium", action="The colony spreads across the dish"):
 
 
 def board(*shots, cast=None):
-    return {"shape": "From one colony to a full dish", "motifs": [],
+    return {"shape": "From one colony to a full dish", "host_outfit": "science_club", "motifs": [],
             "cast": cast or [{"id": "colony", "kind": "thing", "look": "A teal bacterial colony", "size": "a few mm",
                               "scale": "object"}],
             "places": [{"id": "dish", "look": "A clear glass petri dish on a white bench", "lighting": "soft daylight",
-                        "scale": "object"}],
+                        "scale": "object", "walkable": True}],
             "shots": list(shots) or [shot("s01", size="wide"), shot("s02"), shot("s03")]}
 
 
@@ -145,7 +145,7 @@ def test_a_lesson_plan_older_than_the_analysis_is_refused(container, run):
     assert container.run_repository().stage(run.id, StageName.STORYBOARD) is None
 
 
-def test_a_sung_shot_happens_in_the_host_place(container, run):
+def test_a_sung_shot_happens_in_a_walkable_place_in_the_chosen_kit(container, run):
     songs, runs = container.song_repository(), container.run_repository()
     state = runs.stage(run.id, StageName.LESSON)
     state.output["lines"][2]["tag"] = "face_to_camera"
@@ -153,5 +153,5 @@ def test_a_sung_shot_happens_in_the_host_place(container, run):
     claude = FakeClaude(board(shot("s01", size="wide"), shot("s02"), {**shot("s03"), "subjects": ["host"]}))
     result = storyboard(container, claude).run(run.id)
     sung = result.shots[2]
-    assert sung.kind == "sung" and sung.place == "host_place" and sung.performer == "host"
-    assert [p.id for p in result.places] == ["host_place", "dish"] and "Sings from host_place" in claude.prompts[0]
+    assert sung.kind == "sung" and sung.place == "dish" and sung.performer == "host"
+    assert result.host_outfit == "science_club" and "Wardrobe kits: everyday:" in claude.prompts[0]

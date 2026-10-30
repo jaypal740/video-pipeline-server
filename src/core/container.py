@@ -10,6 +10,7 @@ from src.repository.song.song_repository import SongRepository
 from src.service.auth.auth_service import AuthService
 from src.service.image.fal_image_service import FalImageService
 from src.service.image.image_check_service import ImageCheckService
+from src.service.keyframe.keyframe_service import KeyframeService
 from src.service.intake.intake_service import IntakeService
 from src.service.intake.preview_service import PreviewService
 from src.service.lesson.lesson_service import LessonService
@@ -99,5 +100,15 @@ class Container(containers.DeclarativeContainer):
         storage=storage,
         images=fal_image_service,
         check=image_check_service,
+        settings=settings,
+    )
+    keyframe_service = providers.Singleton(
+        KeyframeService,
+        run_repository=run_repository,
+        asset_repository=asset_repository,
+        storage=storage,
+        images=fal_image_service,
+        check=image_check_service,
+        sheets=sheet_service,
         settings=settings,
     )

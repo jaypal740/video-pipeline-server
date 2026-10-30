@@ -1,10 +1,10 @@
 from src.schema.lesson.lesson_schema import BandRules, FormatRules, LessonPlan, VideoType
 from src.schema.song.song_analysis_schema import LyricLine
-from src.schema.storyboard.storyboard_schema import CastMember, Place, ShotKind, Slot, StoryboardDraft
-from src.service.storyboard.storyboard_rules import HOST, HOST_PLACE, LIMITS
+from src.schema.storyboard.storyboard_schema import CastMember, ShotKind, Slot, StoryboardDraft
+from src.service.storyboard.storyboard_rules import HOST, LIMITS
 
 # Bumped whenever the prompt changes, so every run is boarded again with the new prompt.
-PROMPT_VERSION = "storyboard.v6"
+PROMPT_VERSION = "storyboard.v7"
 
 SYSTEM = f"""You storyboard short educational music videos for school classes. The song, its lesson plan \
 and the shot timings already exist; you decide what each shot shows and how the camera films it. An image \
@@ -20,7 +20,10 @@ real size in at most {LIMITS["size"]} words; scale: the rung it is seen at (cosm
 object, microscopic, molecular). A thing that is replaced by a new one (a second cable, a new ship) is a new \
 cast member with its own id. The host and the host's place are given; never declare them.
 - places: id, look in at most {LIMITS["place look"]} words, lighting in at most {LIMITS["lighting"]} words, \
-and scale (cosmic, planet, landscape, human, object, microscopic, molecular).
+scale (cosmic, planet, landscape, human, object, microscopic, molecular) and walkable: true when a person \
+could really stand there (a deck, a shore, a lab), false for space, underwater, inside a cell.
+- host_outfit: the wardrobe kit the host wears in this video, one of the kit names you are given; pick the \
+one that fits the topic and the places.
 - motifs: visual codes kept all video, e.g. thing "antibiotic", rule "always a cyan liquid", the rule in at \
 most {LIMITS["motif rule"]} words. A motif is about appearance only (colour, material, shape), never about \
 where a thing is or what it does. Write each motif's rule into the look of the cast member or place it \
@@ -55,7 +58,8 @@ viewer sees where we are; a sung close-up of the host does not count.
 - Lock the camera when the subject moves fast; keep the subject calm when the camera moves.
 - Number shots keep the main subject in a side third; the figure is drawn in the open side.
 - Write a shot for every slot you are given, sung slots included. In a sung shot the host sings to camera \
-from the host's own place ({HOST_PLACE}, given); code only adjusts its framing.
+inside one of this video's walkable places, in the chosen outfit; declare a fitting walkable place if none \
+exists. Code only adjusts the framing.
 - Lighting stays the same within a shot; show time passing with a cut or a dissolve, never inside one clip.
 - Follow the lesson's idea for each line; change it only when continuity needs it, and keep what it teaches.
 - Use few places and come back to them: the video should feel like one connected film, not a slideshow."""
@@ -75,7 +79,7 @@ def _slot_line(slot: Slot, lines: dict[int, LyricLine], plan: dict) -> str:
 
 
 def user_prompt(plan: LessonPlan, lines: list[LyricLine], slots: list[Slot], band: BandRules, fmt: FormatRules,
-                host: CastMember, host_place: Place) -> str:
+                host: CastMember, wardrobe: dict[str, str]) -> str:
     by_index = {l.index: l for l in lines}
     lesson = {l.index: l for l in plan.lines}
     return (f"Topic: {plan.topic} ({plan.subject}). {plan.summary}\n"
@@ -89,8 +93,9 @@ def user_prompt(plan: LessonPlan, lines: list[LyricLine], slots: list[Slot], ban
             + (f" A scale change of more than {fmt.max_scale_step} step between shots must carry the viewer: "
                "come in on a dissolve or match_cut, or let the shot before push in or pull back."
                if fmt.max_scale_step else "")
-            + f"\n\nHost ({HOST}): {host.look} Size: {host.size}. Sings from {HOST_PLACE}: {host_place.look}, "
-            f"{host_place.lighting}."
+            + f"\n\nHost ({HOST}): {host.look} Size: {host.size}. Wardrobe kits: "
+            + "; ".join(f"{kit}: {outfit}" for kit, outfit in wardrobe.items())
+            + f". For a {fmt.type} video the usual kit is {fmt.host_outfit}."
             + ("" if fmt.type == VideoType.PERSONALISED_HERO else " The host appears only in sung shots.")
             + "\n\n"
             "Slots, in order:\n" + "\n".join(_slot_line(s, by_index, lesson) for s in slots))

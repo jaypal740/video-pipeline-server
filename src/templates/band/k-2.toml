@@ -11,3 +11,5 @@ max_size_jump = 1
 camera_moves = ["static", "push_in", "pan"]
 max_people_in_frame = 2
 max_camera_speed = "slow"
+style = "thick clean dark outlines, flat saturated colours, simple rounded shapes and four-heads-tall proportions"
+style_name = "A bold 2D cartoon"

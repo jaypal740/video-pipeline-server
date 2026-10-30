@@ -6,3 +6,4 @@ face_to_camera_share = 0.2
 shape = "Each step in order, coming back to the same view between steps."
 keep_same = "The same place and the thing that changes."
 camera = "A steady wide shot of the place; close shots on each change."
+host_outfit = "maker"

@@ -44,6 +44,10 @@ class BandRules(BaseModel):
     camera_moves: list[str]
     max_people_in_frame: int
     max_camera_speed: str
+    # Image prompts: style_name names the medium ("A bold 2D cartoon"), style lists its design features
+    # (outlines, shading, proportions). look stays the plain-words version the planners read.
+    style: str
+    style_name: str
 
 
 class FormatRules(BaseModel):
@@ -60,6 +64,8 @@ class FormatRules(BaseModel):
     keep_same: str
     camera: str
     max_scale_step: int | None = None
+    # The host's wardrobe kit that usually fits this type; the storyboard may pick another for the topic.
+    host_outfit: str
 
 
 class KeyTerm(BaseModel):

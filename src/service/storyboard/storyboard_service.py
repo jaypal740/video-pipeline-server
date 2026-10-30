@@ -12,13 +12,13 @@ from src.schema.lesson.lesson_schema import BandRules, FormatRules, LessonPlan
 from src.schema.run.run_schema import Run
 from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_analysis_schema import SongAnalysis
-from src.schema.storyboard.storyboard_schema import (CastKind, CastMember, Place, ShotPatch, Slot, Storyboard,
+from src.schema.storyboard.storyboard_schema import (CastKind, CastMember, ShotPatch, Slot, Storyboard,
                                                      StoryboardDraft)
 from src.service.lesson.lesson_rules import band_rules, format_rules
 from src.service.llm.llm_service import LlmCall, LlmError, LlmService
 from src.service.storyboard.storyboard_prompt import PROMPT_VERSION, SYSTEM, patch_prompt, user_prompt
-from src.service.storyboard.storyboard_rules import (HOST_PLACE, assemble, fix, header_problems, host_for,
-                                                     host_place_for, shot_problems, wanted)
+from src.service.storyboard.storyboard_rules import (assemble, fix, header_problems, host_for, shot_problems,
+                                                     wanted, wardrobe_for)
 from src.service.storyboard.storyboard_slots import make_slots
 
 logger = logging.getLogger(__name__)
@@ -47,12 +47,12 @@ class StoryboardService:
         plan = self._plan(run)
         analysis = self._analysis(run)
         band, fmt = band_rules(plan.grade_band), format_rules(plan.video_type)
-        host, host_place = host_for(plan.grade_band), host_place_for(plan.grade_band)
+        host, wardrobe = host_for(plan.grade_band), wardrobe_for(plan.grade_band)
         if [l.index for l in plan.lines] != [l.index for l in analysis.lines]:
             raise ValueError(f"Run {run.id}'s lesson plan is older than its song analysis; run the lesson stage again")
         slots = make_slots(analysis.lines, plan.lines, analysis.beats, analysis.duration_s, band.shot_seconds)
         model = model or run.model_pins.get(StageName.STORYBOARD) or self._settings.storyboard_model
-        prompt = user_prompt(plan, analysis.lines, slots, band, fmt, host, host_place)
+        prompt = user_prompt(plan, analysis.lines, slots, band, fmt, host, wardrobe)
         key = hashlib.sha256(f"{PROMPT_VERSION}|{model}|{SYSTEM}|{prompt}".encode()).hexdigest()
 
         state = self._runs.stage(run.id, StageName.STORYBOARD)
@@ -73,7 +73,7 @@ class StoryboardService:
                                           max_attempts=1 + MAX_HEADER_REASKS)
             spent += self._log_cost(run.id, call)
             reasks = 0
-            problems = self._checked(draft, slots, band, fmt, host, host_place)
+            problems = self._checked(draft, slots, band, fmt, host)
             while problems and reasks < MAX_REASKS:
                 reasks += 1
                 logger.warning("storyboard %s: re-ask %d for %s:\n%s", run.id[:8], reasks, sorted(problems),
@@ -87,7 +87,7 @@ class StoryboardService:
                 patched = {s.slot: s for s in patch.shots if s.slot in problems}
                 draft.shots = sorted([s for s in draft.shots if s.slot not in problems] + list(patched.values()),
                                      key=lambda s: s.slot)
-                problems = self._checked(draft, slots, band, fmt, host, host_place)
+                problems = self._checked(draft, slots, band, fmt, host)
             if problems:
                 state.output = {"draft": draft.model_dump(mode="json"), "problems": problems}
                 raise ValueError(f"storyboard still has problems after {MAX_REASKS} re-asks: " + "; ".join(
@@ -97,8 +97,6 @@ class StoryboardService:
                 raise ValueError("storyboard header broke while fixing shots: " + "; ".join(header))
             used = {s.place for s in draft.shots}
             draft.places = [p for p in draft.places if p.id in used]          # unused places are dropped
-            if HOST_PLACE in used:
-                draft.places.insert(0, host_place)
             shots, flags = assemble(draft, slots, host)
         except LlmError as exc:
             self._log_cost(run.id, exc.call)
@@ -108,6 +106,7 @@ class StoryboardService:
             self._fail(state, exc)
             raise
         board = Storyboard(grade_band=plan.grade_band, video_type=plan.video_type, shape=draft.shape,
+                           host_outfit=draft.host_outfit,
                            cast=[host] + draft.cast, places=draft.places, motifs=draft.motifs, shots=shots,
                            flags=flags, model=model, prompt_version=PROMPT_VERSION)
         state.status, state.output, state.finished_at = StageStatus.DONE, board.model_dump(mode="json"), utcnow()
@@ -120,7 +119,7 @@ class StoryboardService:
         return board
 
     def _checked(self, draft: StoryboardDraft, slots: list[Slot], band: BandRules, fmt: FormatRules,
-                 host: CastMember, host_place: Place) -> dict[str, list[str]]:
+                 host: CastMember) -> dict[str, list[str]]:
         """Code's fixes, then what is still wrong, per slot."""
         by_id = {s.id: s for s in slots}
         dropped = sorted({s.slot for s in draft.shots} - wanted(slots))
@@ -131,7 +130,7 @@ class StoryboardService:
         for shot in draft.shots:
             for change in fix(shot, by_id[shot.slot], band, people):
                 logger.info("storyboard: code fixed %s", change)
-        problems = shot_problems(draft, slots, band, fmt, host, host_place)
+        problems = shot_problems(draft, slots, band, fmt, host)
         logger.info("storyboard: checks found %d problems in %d shots", sum(len(v) for v in problems.values()),
                     len(problems))
         return problems

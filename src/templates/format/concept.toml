@@ -7,3 +7,4 @@ shape = "Start on what we can see, step down the scales to where it happens, sho
 keep_same = "The same subject, at its real size."
 camera = "Push in and pull back between scales; a locked camera while the idea plays out."
 max_scale_step = 1
+host_outfit = "science_club"

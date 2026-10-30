@@ -6,6 +6,7 @@ import uvicorn
 from src.core.container import Container
 from src.core.logging import configure_logging
 from src.core.database import create_tables
+from src.schema.asset.asset_schema import ReviewState
 from src.schema.lesson.lesson_schema import GradeBand, VideoType
 from src.schema.run.run_schema import Run
 from src.schema.song.song_schema import SongStatus
@@ -179,11 +180,48 @@ def run_sheets(
                        + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
 
 
+@run_app.command("keyframes")
+def run_keyframes(
+    run_id: str,
+    force: bool = typer.Option(False, "--force", help="Draw again even if nothing changed."),
+) -> None:
+    """Stage 4b: one picture per shot, the frozen opening moment, drawn from the sheets and checked."""
+    made = container.keyframe_service().run(run_id, force=force)
+    for shot_id, asset in made.items():
+        typer.echo(f"  {shot_id}  {asset.review:12s} try {asset.params.get('try', 1)}  {asset.path}"
+                   + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
+
+
+@run_app.command("review")
+def run_review(run_id: str) -> None:
+    """Images of this run waiting for a person, with the check's reasons."""
+    for asset in container.asset_repository().assets.list(run_id=run_id, review=ReviewState.NEEDS_REVIEW):
+        typer.echo(f"  {asset.id}  {asset.stage:16s} {asset.target_id:14s} {asset.path}")
+        for line in (asset.review_notes or "").splitlines():
+            typer.echo(f"      - {line}")
+
+
+@run_app.command("approve")
+def run_approve(asset_id: str) -> None:
+    """A person accepts an image the check left for review; it may then be used like a passed one."""
+    assets = container.asset_repository().assets
+    asset = assets.get(asset_id)
+    if asset is None:
+        typer.echo(f"Asset {asset_id} not found")
+        raise typer.Exit(code=1)
+    asset.review = ReviewState.APPROVED
+    assets.update(asset)
+    typer.echo(f"  {asset.target_id} approved: {asset.path}")
+
+
 @host_app.command("draw")
 def host_draw(band: GradeBand, count: int = typer.Option(3, "--count", help="How many candidates to draw.")) -> None:
     """Draw candidate front views of a band's host from its description. Pick one with `host approve`."""
     for asset in container.sheet_service().host_candidates(band, count):
-        typer.echo(f"  {asset.id}  candidate {asset.params['candidate']}  {asset.path}  ${asset.cost_usd:.3f}")
+        typer.echo(f"  {asset.id}  candidate {asset.params['candidate']}  {'ok' if asset.review != 'failed' else 'FAILED'}"
+                   f"  {asset.path}  ${asset.cost_usd:.3f}  {asset.params['seconds']}s")
+        for line in (asset.review_notes or "").splitlines():
+            typer.echo(f"      - {line}")
 
 
 @host_app.command("approve")
@@ -191,6 +229,20 @@ def host_approve(band: GradeBand, asset_id: str) -> None:
     """Keep this candidate as the band's host, then draw its other views and its place."""
     for asset in container.sheet_service().approve_host(band, asset_id):
         typer.echo(f"  {asset.params['view']:14s} {asset.review:12s} {asset.path}")
+
+
+@host_app.command("recheck")
+def host_recheck(band: GradeBand) -> None:
+    """Run the image check again on the host's views waiting for review; draws nothing."""
+    for asset in container.sheet_service().recheck_host(band):
+        typer.echo(f"  {asset.params['view']:14s} {asset.review:12s}" + (f"  {asset.review_notes.splitlines()[0][:90]}" if asset.review_notes else ""))
+
+
+@host_app.command("redraw")
+def host_redraw(band: GradeBand, view: str) -> None:
+    """Draw one view of the host again (front stays); the old tries are kept as failed."""
+    asset = container.sheet_service().redraw_host_view(band, view)
+    typer.echo(f"  {view:14s} {asset.review:12s} {asset.path}" + (f"  {asset.review_notes.splitlines()[0][:90]}" if asset.review_notes else ""))
 
 
 @host_app.command("show")

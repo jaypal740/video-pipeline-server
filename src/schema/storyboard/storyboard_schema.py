@@ -131,10 +131,13 @@ class CastMember(BaseModel):
 
 
 class Place(BaseModel):
+    """walkable: a person could really stand here; the host sings only from walkable places."""
+
     id: str
     look: str
     lighting: str
     scale: Scale
+    walkable: bool
 
 
 class Motif(BaseModel):
@@ -182,9 +185,11 @@ class ShotDraft(BaseModel):
 
 
 class StoryboardDraft(BaseModel):
-    """What the model writes for the whole video. The host is given, not written."""
+    """What the model writes for the whole video. The host is given, not written; host_outfit names the
+    wardrobe kit the host wears in this video."""
 
     shape: str
+    host_outfit: str
     cast: list[CastMember]
     places: list[Place]
     motifs: list[Motif]
@@ -218,6 +223,7 @@ class Storyboard(BaseModel):
     grade_band: GradeBand
     video_type: VideoType
     shape: str
+    host_outfit: str
     cast: list[CastMember]
     places: list[Place]
     motifs: list[Motif]
