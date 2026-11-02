@@ -51,7 +51,7 @@ class Container(containers.DeclarativeContainer):
     auth_repository = providers.Singleton(AuthRepository, session_factory=session_factory)
 
     # local tools
-    ffmpeg_service = providers.Singleton(FfmpegService)
+    ffmpeg_service = providers.Singleton(FfmpegService, timeout_s=settings.provided.ffmpeg_timeout_s)
     forced_align_service = providers.Singleton(ForcedAlignService, device=settings.provided.device)
     beat_service = providers.Singleton(BeatService, device=settings.provided.device)
 
