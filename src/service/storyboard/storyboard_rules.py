@@ -3,7 +3,7 @@ import tomllib
 
 from src.schema.lesson.lesson_schema import BandRules, FormatRules, GradeBand, VideoType
 from src.schema.storyboard.storyboard_schema import (Angle, CameraMove, CastKind, CastMember, Continuity, Direction,
-                                                     Motion, Moves, Place, Position, Scale, ScreenDirection, Shot, ShotDraft,
+                                                     Motion, Moves, Position, Scale, ScreenDirection, Shot, ShotDraft,
                                                      ShotKind, ShotSize, Slot, Speed, StoryboardDraft, Transition)
 from src.service.lesson.lesson_rules import TEMPLATES
 

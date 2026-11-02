@@ -146,7 +146,7 @@ def test_a_lesson_plan_older_than_the_analysis_is_refused(container, run):
 
 
 def test_a_sung_shot_happens_in_a_walkable_place_in_the_chosen_kit(container, run):
-    songs, runs = container.song_repository(), container.run_repository()
+    runs = container.run_repository()
     state = runs.stage(run.id, StageName.LESSON)
     state.output["lines"][2]["tag"] = "face_to_camera"
     runs.stage_states.update(state)

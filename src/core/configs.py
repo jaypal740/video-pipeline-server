@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     assembly_height: int = Field(default=720, validation_alias="PIPELINE_ASSEMBLY_HEIGHT")
     assembly_fps: int = Field(default=24, validation_alias="PIPELINE_ASSEMBLY_FPS")
     assembly_dissolve_s: float = Field(default=0.4, validation_alias="PIPELINE_ASSEMBLY_DISSOLVE_S")
+    # Any one ffmpeg or ffprobe call that runs longer than this is stopped and fails its stage.
+    ffmpeg_timeout_s: float = Field(default=600.0, validation_alias="PIPELINE_FFMPEG_TIMEOUT_S")
     image_workers: int = Field(default=4, validation_alias="PIPELINE_IMAGE_WORKERS")
     # The judge's 0-10 score an image needs to pass; below it the image is drawn again. The judge gives a 6
     # to "the right picture with one small difference", which is good enough for a viewer.

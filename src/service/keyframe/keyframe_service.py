@@ -1,6 +1,5 @@
 import hashlib
 import logging
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import NamedTuple
 
@@ -10,33 +9,29 @@ from src.core.configs import Settings
 from src.repository.asset.asset_repository import AssetRepository
 from src.repository.run.run_repository import RunRepository
 from src.schema.asset.asset_schema import Asset, ReviewState
-from src.schema.asset.cost_entry_schema import CostEntry
 from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
-from src.schema.image.image_check_schema import Brief, Checklist, Correction
+from src.schema.image.image_check_schema import Brief
 from src.schema.run.stage_state_schema import StageState
 from src.schema.storyboard.storyboard_schema import (CameraMove, CastMember, Continuity, Moves, Place, Shot,
                                                      ShotKind, Storyboard)
 from src.service.image.fal_image_service import RESOLUTION, FalImageService, ImageReply
 from src.service.image.image_check_service import ImageCheckService
 from src.service.lesson.lesson_rules import band_rules
-from src.service.llm.llm_service import LabelledImage, LlmCall, LlmError, LlmService
-from src.service.keyframe.keyframe_prompt import (CORRECTION, LINK_LABEL, START_LABEL, check_correction,
-                                                  correction_request, end_brief, end_prompt, keyframe_brief,
+from src.service.llm.llm_service import LabelledImage, LlmCall, LlmService
+from src.service.keyframe.keyframe_prompt import (LINK_LABEL, START_LABEL, end_brief, end_prompt, keyframe_brief,
                                                   keyframe_prompt, linked_brief, linked_prompt, ref_label, view_for)
 from src.service.sheet.sheet_prompt import PLATE, Style
 from src.service.image.image_prices import image_model
-from src.service.sheet.sheet_service import URL_SECONDS, USABLE, SheetService
-
-PASSED = (ReviewState.PASSED, ReviewState.APPROVED)          # a try that met the bar; USABLE adds used_best
+from src.service.sheet.sheet_service import USABLE, SheetService
+from src.service.stage.stage_common import (PASSED, StopLoss, add_cost, asset_url, keep_best, storyboard_of,
+                                            write_correction)
 from src.service.storage.storage_service import Storage
 from src.service.storyboard.storyboard_rules import HOST
 
 logger = logging.getLogger(__name__)
 
 ASPECT = "16:9"
-# The stop-loss looks at the first this-many finished shots.
-STOP_LOSS_AFTER = 8
 
 
 # What a keyframe row is: a shot's opening drawn from the sheets, an opening drawn from the picture the shot
@@ -127,7 +122,7 @@ class KeyframeService:
         self._settings = settings
 
     def run(self, run_id: str, force: bool = False) -> dict[str, Asset]:
-        board = self._board(run_id)
+        board = storyboard_of(self._runs, run_id)
         sheets = self._usable_sheets(run_id, board)
         style, model = Style.of(band_rules(board.grade_band)), self._settings.keyframe_model
         cast = {c.id: c for c in board.cast}
@@ -153,7 +148,7 @@ class KeyframeService:
         logger.info("keyframes %s: %s, %d shots in %d chains, %d repeats reused", run_id[:8], model, shots,
                     len(chains), len(board.shots) - shots)
         self._errors: dict[str, str] = {}
-        self._lock, self._finished, self._failed, self._stopped = threading.Lock(), 0, 0, None
+        self._stop = StopLoss(self._settings.image_stop_loss, "shots")
         try:
             made, ends, blocked = self._draw_chains(run_id, model, style, chains, cast, places, sheets)
         except Exception as exc:
@@ -193,7 +188,7 @@ class KeyframeService:
     def recheck(self, run_id: str) -> dict[str, Asset]:
         """Judge every keyframe of this run that did not pass again, with the current brief; no image is drawn.
         The stage then takes the best passed try of each shot, or waits for a person as before."""
-        board = self._board(run_id)
+        board = storyboard_of(self._runs, run_id)
         state = self._runs.stage(run_id, StageName.KEYFRAMES)
         if state is None or not state.output:
             raise ValueError(f"Run {run_id} has no keyframes yet")
@@ -248,8 +243,8 @@ class KeyframeService:
         """Judge one stored try again with `model` and write the verdict, and who gave it, onto its row."""
         checklist, call = self._check.check(self._storage.get(asset.path), labelled, brief, model=model)
         problems = self._check.problems(checklist, brief)
-        self._cost(run_id, call.provider, call.model, call.cost_usd, asset.target_id,
-                   call.input_tokens + call.output_tokens, "tokens")
+        add_cost(self._assets, run_id, StageName.KEYFRAMES, call.provider, call.model, call.cost_usd,
+                 asset.target_id, call.input_tokens + call.output_tokens, "tokens")
         asset.params = {**asset.params, "score": checklist.score, "judged_by": model,
                         "asked_for": [a.model_dump() for a in checklist.asked_for]}
         asset.review = ReviewState.PASSED if not problems else ReviewState.FAILED
@@ -259,29 +254,12 @@ class KeyframeService:
                     asset.review, checklist.score)
 
     def _keep(self, shot_id: str, tries: list[Asset]) -> Asset | None:
-        """Which of a shot's tries the stage uses: the best passed one; else the best-scoring try at or above
-        the floor, marked used_best; else none, and the shot is recorded as failed. Once the second-opinion judge
-        has judged a try, only its verdict counts for the floor. Rows are updated to match."""
-        passed = [a for a in tries if a.review in PASSED]
-        if passed:
-            return max(passed, key=lambda a: a.params.get("score") or 0)
+        """Which of a shot's tries the stage uses (see keep_best). Once the second-opinion judge has judged a
+        try, only its verdict counts for the floor."""
         second = self._settings.image_second_opinion_model
         judged = [a for a in tries if second and a.params.get("judged_by") == second]
-        best = max(judged or tries, key=lambda a: a.params.get("score") or 0)
-        for a in tries:
-            review = (ReviewState.USED_BEST if a is best and (a.params.get("score") or 0) >= self._settings.image_floor_score
-                      else ReviewState.FAILED)
-            if a.review != review:
-                a.review = a.review if a.review == ReviewState.APPROVED else review
-                self._assets.assets.update(a)
-        if best.review == ReviewState.USED_BEST:
-            logger.warning("keyframe %s: no try passed; using the best, %s/10: %s", shot_id, best.params.get("score"),
-                           (best.review_notes or "").splitlines()[0] if best.review_notes else "")
-            return best
-        self._errors[shot_id] = (f"failed every draw; best {best.params.get('score')}/10: "
-                                 + "; ".join((best.review_notes or "").splitlines()))
-        logger.error("keyframe %s: %s", shot_id, self._errors[shot_id])
-        return None
+        return keep_best(self._assets, self._settings.image_floor_score, logger, "keyframe", shot_id, tries,
+                         self._errors, judged, pool_only=False)
 
     # --- drawing ------------------------------------------------------------------------------------------
 
@@ -371,7 +349,7 @@ class KeyframeService:
         if not todo:
             return made
         self._guard_spend(run_id, model, len(todo))
-        ref_urls = {r.id: self._url(r) for plan, *_ in todo for r in plan.refs}
+        ref_urls = {r.id: asset_url(self._storage, self._images.upload, r) for plan, *_ in todo for r in plan.refs}
         ref_bytes = {r.id: self._storage.get(r.path) for plan, *_ in todo for r in plan.refs}
         with ThreadPoolExecutor(max_workers=self._settings.image_workers) as pool:
             futures = {pool.submit(self._attempts, model, ref_urls, ref_bytes, *job): job[0] for job in todo}
@@ -384,14 +362,14 @@ class KeyframeService:
                     self._errors[plan.key] = str(exc)
                     continue
                 if not tries:                                   # skipped: the stop-loss had fired
-                    self._errors[plan.key] = self._stopped
+                    self._errors[plan.key] = self._stop.reason
                     continue
                 kept = self._store_attempts(run_id, plan, tries)
                 if kept is not None:
                     made[plan.key] = kept
-        if self._stopped:
-            logger.error("keyframes %s: %s; %d pictures not drawn", run_id[:8], self._stopped,
-                         sum(1 for e in self._errors.values() if e == self._stopped))
+        if self._stop.reason:
+            logger.error("keyframes %s: %s; %d pictures not drawn", run_id[:8], self._stop.reason,
+                         sum(1 for e in self._errors.values() if e == self._stop.reason))
         return made
 
     def _guard_spend(self, run_id: str, model: str, count: int) -> None:
@@ -413,14 +391,15 @@ class KeyframeService:
         """Network only: draw, check, retry on a new seed with a correction written from the last try's
         findings. No database access in here. The workers keep the stop-loss count themselves, so no draw
         starts once it has fired, whatever the timing."""
-        if self._stopped:
+        if self._stop.reason:
             return []
         shot, prompt, brief = plan.shot, plan.prompt, plan.brief
         urls = [ref_urls[r.id] for r in plan.refs]
         labelled = [LabelledImage(label=label, data=ref_bytes[r.id]) for label, r in zip(plan.labels, plan.refs)]
         tries = []
         for attempt, seed, thinking, cache_key in seeds:
-            correction, fix = self._correction(shot, prompt, brief, findings) if findings else (None, None)
+            correction, fix = (write_correction(self._llm, self._settings.image_check_model, logger, "keyframe",
+                                                shot.id, prompt, brief, findings) if findings else (None, None))
             drawn = f"{prompt} {correction}" if correction else prompt
             reply = self._images.generate(model, drawn, urls, ASPECT, seed=seed, thinking=thinking)
             checklist, call = self._check.check(reply.data, labelled, brief)
@@ -433,15 +412,15 @@ class KeyframeService:
             if not problems:
                 logger.info("keyframe %s: passed on try %d, $%.3f, %.1fs", plan.key, attempt, reply.cost_usd,
                             reply.seconds)
-                self._count(passed=True)
+                self._stop.count(passed=True)
                 return tries
             logger.warning("keyframe %s: try %d failed %d checks:\n%s", plan.key, attempt, len(problems),
                            "\n".join(f"  - {p}" for p in problems))
         if self._second_opinion(plan, tries, labelled):
-            self._count(passed=True)
+            self._stop.count(passed=True)
             return tries
         logger.warning("keyframe %s: left for review after %d tries", plan.key, len(seeds))
-        self._count(passed=False)
+        self._stop.count(passed=False)
         return tries
 
     def _second_opinion(self, plan: Plan, tries: list[Attempt], labelled: list[LabelledImage]) -> bool:
@@ -464,29 +443,6 @@ class KeyframeService:
                     checklist.score)
         return True
 
-    def _correction(self, shot: Shot, prompt: str, brief: Brief, findings: list[str]) -> tuple[str | None, LlmCall | None]:
-        """A short correction for the retry, from the failed prompt, the opening moment and the judge's
-        findings; when none can be written the retry is drawn from the plain prompt."""
-        try:
-            fix, call = self._llm.parse(self._settings.image_check_model, CORRECTION,
-                                        correction_request(prompt, brief.moment or "", findings), Correction,
-                                        check=check_correction, effort="low")
-        except LlmError as exc:
-            logger.warning("keyframe %s: no correction, retrying the plain prompt: %s", shot.id, exc)
-            return None, exc.call
-        logger.info("keyframe %s: retry corrected: %s", shot.id, fix.text)
-        return fix.text, call
-
-    def _count(self, passed: bool) -> None:
-        """The stop-loss: after the first STOP_LOSS_AFTER finished shots, too many failures pause the stage."""
-        with self._lock:
-            self._finished += 1
-            self._failed += not passed
-            if self._finished == STOP_LOSS_AFTER and self._failed > STOP_LOSS_AFTER * self._settings.image_stop_loss \
-                    and not self._stopped:
-                self._stopped = (f"stopped: {self._failed} of the first {self._finished} shots failed every draw; "
-                                 "fix the cause before drawing more")
-
     def _store_attempts(self, run_id: str, plan: Plan, tries: list[Attempt]) -> Asset | None:
         shot, refs = plan.shot, plan.refs
         prefix = "" if plan.view == START else f"{plan.view.removesuffix('_keyframe')}-"
@@ -505,10 +461,11 @@ class KeyframeService:
                         "seconds": t.reply.seconds, "judged_by": (t.second or t.check).model,
                         "score": t.score, "asked_for": t.asked_for, "correction": t.correction},
                 cost_usd=t.reply.cost_usd, review=review, review_notes="\n".join(t.notes) or None))
-            self._cost(run_id, self._images.name, t.reply.model, t.reply.cost_usd, shot.id, 1, "image")
+            add_cost(self._assets, run_id, StageName.KEYFRAMES, self._images.name, t.reply.model, t.reply.cost_usd,
+                     shot.id, 1, "image")
             for call in (c for c in (t.check, t.fix, t.second) if c is not None):
-                self._cost(run_id, call.provider, call.model, call.cost_usd, shot.id,
-                           call.input_tokens + call.output_tokens, "tokens")
+                add_cost(self._assets, run_id, StageName.KEYFRAMES, call.provider, call.model, call.cost_usd, shot.id,
+                         call.input_tokens + call.output_tokens, "tokens")
             stored.append(asset)
         return self._keep(plan.key, stored)
 
@@ -549,10 +506,6 @@ class KeyframeService:
 
     # --- small helpers ------------------------------------------------------------------------------------
 
-    def _url(self, asset: Asset) -> str:
-        return self._storage.url(asset.path, URL_SECONDS) or self._images.upload(self._storage.get(asset.path),
-                                                                                 "image/png")
-
     @staticmethod
     def _base_seed(prompt: str, refs: list[Asset]) -> int:
         return int(hashlib.sha256("|".join([prompt, *(r.sha256 for r in refs)]).encode()).hexdigest()[:8], 16) % 2**31
@@ -571,13 +524,3 @@ class KeyframeService:
     def _cache_key(model: str, prompt: str, refs: list[Asset], seed: int, thinking: str) -> str:
         parts = [model, prompt, *(r.sha256 for r in refs), str(seed), ASPECT, RESOLUTION, thinking]
         return hashlib.sha256("|".join(parts).encode()).hexdigest()
-
-    def _cost(self, run_id: str, provider: str, model: str, cost: float, target_id: str, units: float, unit: str) -> None:
-        self._assets.cost_entries.add(CostEntry(run_id=run_id, stage=StageName.KEYFRAMES, provider=provider, model=model,
-                                                cost_usd=cost, target_id=target_id, units=units, unit=unit))
-
-    def _board(self, run_id: str) -> Storyboard:
-        state = self._runs.stage(run_id, StageName.STORYBOARD)
-        if state is None or state.status != StageStatus.DONE:
-            raise ValueError(f"Run {run_id} has no storyboard; run the storyboard stage first")
-        return Storyboard(**state.output)

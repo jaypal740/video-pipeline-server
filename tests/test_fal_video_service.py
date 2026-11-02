@@ -40,7 +40,7 @@ class FakeReply:
         pass
 
 
-def make(monkeypatch, client, fallback="minimax-h3", content_type="video/mp4"):
+def make(monkeypatch, client, fallback="minimax-h3-max-turbo", content_type="video/mp4"):
     service = FalVideoService(api_key="x", fallback_model=fallback)
     monkeypatch.setattr(service, "_get_client", lambda: client)
     monkeypatch.setattr(module.httpx, "get", lambda url, timeout, follow_redirects: FakeReply(content_type))
@@ -51,36 +51,37 @@ def make(monkeypatch, client, fallback="minimax-h3", content_type="video/mp4"):
 def test_each_model_is_asked_in_its_own_argument_names(monkeypatch):
     client = FakeClient()
     service = make(monkeypatch, client)
-    reply = service.generate("kling-3-pro", "the ship sails", "https://img/k.png", seconds=4, seed=7, negative="text")
-    assert reply.request_id == "req-1" and reply.cost_usd == pytest.approx(0.448) and reply.seconds_requested == 4
+    reply = service.generate("kling-o3-standard", "the ship sails", "https://img/k.png", seconds=4, seed=7,
+                             negative="text")
+    assert reply.request_id == "req-1" and reply.cost_usd == pytest.approx(0.336) and reply.seconds_requested == 4
     endpoint, args = client.calls[0]
-    assert endpoint == video_model("kling-3-pro").endpoint
-    assert args["duration"] == "4" and args["start_image_url"] == "https://img/k.png" and args["generate_audio"] is False
-    assert args["negative_prompt"] == "text" and "seed" not in args               # Kling has no seed
-    service.generate("wan-3", "the ship sails", "https://img/k.png", seconds=1, seed=7, negative="text")
+    assert endpoint == video_model("kling-o3-standard").endpoint
+    assert args["duration"] == "4" and args["image_url"] == "https://img/k.png" and args["generate_audio"] is False
+    assert "negative_prompt" not in args and "seed" not in args                  # Kling O3 takes neither
+    reply = service.generate("minimax-h3-max-turbo", "the ship sails", "https://img/k.png", seconds=1.23, seed=7,
+                             negative="text")
     _, args = client.calls[1]
-    assert args["duration"] == 2 and args["seed"] == 7 and args["audio"] is False     # 2 s minimum, seeded
-    assert args["enable_prompt_expansion"] is False and "negative_prompt" not in args
-    service.generate("minimax-h3", "the ship sails", "https://img/k.png", seconds=3)
-    assert client.calls[2][1]["duration"] == 5 and client.calls[2][1]["resolution"] == "768P"
+    assert args["duration"] == 1.3 and args["seed"] == 7 and args["resolution"] == "768P"   # any length, seeded
+    assert args["prompt_expansion_mode"] == "disabled" and "negative_prompt" not in args
+    assert reply.cost_usd == pytest.approx(0.052)
 
 
 def test_a_transient_error_is_retried_on_the_same_model_and_a_content_error_falls_back(monkeypatch):
-    kling = video_model("kling-3-pro").endpoint
+    kling = video_model("kling-o3-standard").endpoint
     client = FakeClient(fail={kling: fal_client.FalClientTimeoutError(10, "req-x")})
-    reply = make(monkeypatch, client).generate("kling-3-pro", "p", "https://img", seconds=5)
-    assert reply.model == "kling-3-pro" and [e for e, _ in client.calls] == [kling, kling]
+    reply = make(monkeypatch, client).generate("kling-o3-standard", "p", "https://img", seconds=5)
+    assert reply.model == "kling-o3-standard" and [e for e, _ in client.calls] == [kling, kling]
 
     blocked = fal_client.FalClientError("no_media_generated")
     client = FakeClient(fail={kling: blocked})
-    reply = make(monkeypatch, client).generate("kling-3-pro", "p", "https://img", seconds=5)
-    assert reply.model == "minimax-h3" and client.calls[1][0] == video_model("minimax-h3").endpoint
-    assert reply.seconds_requested == 5 and reply.cost_usd == pytest.approx(0.30)
+    reply = make(monkeypatch, client).generate("kling-o3-standard", "p", "https://img", seconds=5)
+    assert reply.model == "minimax-h3-max-turbo" and client.calls[1][0] == video_model("minimax-h3-max-turbo").endpoint
+    assert reply.seconds_requested == 5 and reply.cost_usd == pytest.approx(0.20)
 
     with pytest.raises(fal_client.FalClientError):
-        make(monkeypatch, FakeClient(fail={kling: blocked}), fallback=None).generate("kling-3-pro", "p", "https://img", 5)
+        make(monkeypatch, FakeClient(fail={kling: blocked}), fallback=None).generate("kling-o3-standard", "p", "https://img", 5)
 
 
 def test_a_download_that_is_not_a_video_is_refused(monkeypatch):
     with pytest.raises(RuntimeError, match="instead of a video"):
-        make(monkeypatch, FakeClient(), content_type="text/html").generate("wan-3", "p", "https://img", seconds=3)
+        make(monkeypatch, FakeClient(), content_type="text/html").generate("minimax-h3-max-turbo", "p", "https://img", seconds=3)

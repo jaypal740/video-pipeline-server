@@ -6,13 +6,12 @@ from src.core.configs import Settings
 from src.repository.asset.asset_repository import AssetRepository
 from src.repository.run.run_repository import RunRepository
 from src.schema.asset.asset_schema import Asset, ReviewState
-from src.schema.asset.cost_entry_schema import CostEntry
 from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.image.image_check_schema import Brief
 from src.schema.lesson.lesson_schema import GradeBand
 from src.schema.run.stage_state_schema import StageState
-from src.schema.storyboard.storyboard_schema import CastKind, CastMember, Place, Storyboard
+from src.schema.storyboard.storyboard_schema import CastMember, Place
 from src.service.image.fal_image_service import RESOLUTION, FalImageService
 from src.service.image.image_check_service import ImageCheckService
 from src.service.lesson.lesson_rules import band_rules
@@ -20,6 +19,7 @@ from src.service.llm.llm_service import LabelledImage
 from src.service.sheet.sheet_prompt import (FACE_VIEWS, HOST_VIEWS, PLATE, Style, aspect_for, plate_brief,
                                             plate_prompt, sheet_brief, sheet_prompt, views_for)
 from src.service.sheet.sheet_layout import compose_sheet
+from src.service.stage.stage_common import add_cost, asset_url, storyboard_of
 from src.service.storage.storage_service import Storage
 from src.service.storyboard.storyboard_rules import HOST, host_in, outfit_text, wardrobe_for
 
@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 # Plain references want minimal thinking: the model then spends less effort on annotations. The last try
 # of an image thinks a little more. How many tries an image gets is a setting (image_max_tries).
-URL_SECONDS = 3600
 # The outfit the host is approved in; other wardrobe kits are drawn from it on first use.
 BASE_KIT = "everyday"
 KIT_VIEWS = ["front", "three_quarter", "to_camera"]
@@ -203,7 +202,7 @@ class SheetService:
         run = self._runs.runs.get(run_id)
         if run is None:
             raise LookupError(f"Run {run_id} not found")
-        board = self._board(run_id)
+        board = storyboard_of(self._runs, run_id)
         band = board.grade_band
         hosts = self.host_sheets(band)
         if any(view not in hosts for view in KIT_VIEWS):              # side, back and expressions are optional
@@ -272,7 +271,7 @@ class SheetService:
         max_tries = self._settings.image_max_tries
         tries = []
         base = int(hashlib.sha256("|".join([prompt, *(r.sha256 for r in refs)]).encode()).hexdigest()[:8], 16) % 2**31
-        ref_urls = [self._url(r) for r in refs]
+        ref_urls = [asset_url(self._storage, self._images.upload, r) for r in refs]
         for attempt in range(1, max_tries + 1):
             seed, thinking = base + attempt - 1, "medium" if attempt == max_tries else "minimal"
             cache_key = self._cache_key(model, prompt, refs, seed, aspect, thinking)
@@ -340,10 +339,6 @@ class SheetService:
             seed=cached.seed, prompt=cached.prompt, params={**cached.params, "view": view, "reused_from": cached.id},
             cost_usd=0.0, review=ReviewState.PASSED))
 
-    def _url(self, asset: Asset) -> str:
-        return self._storage.url(asset.path, URL_SECONDS) or self._images.upload(self._storage.get(asset.path),
-                                                                                 "image/png")
-
     @staticmethod
     def _cache_key(model: str, prompt: str, refs: list[Asset], seed: int, aspect: str, thinking: str) -> str:
         parts = [model, prompt, *(r.sha256 for r in refs), str(seed), aspect, RESOLUTION, thinking]
@@ -352,14 +347,7 @@ class SheetService:
     def _log_cost(self, run_id: str | None, stage: StageName, provider: str, model: str, cost: float,
                   target_id: str, units: float, unit: str) -> None:
         if run_id is not None:                                  # host images carry their cost on the asset
-            self._assets.cost_entries.add(CostEntry(run_id=run_id, stage=stage, provider=provider, model=model,
-                                                    cost_usd=cost, target_id=target_id, units=units, unit=unit))
-
-    def _board(self, run_id: str) -> Storyboard:
-        state = self._runs.stage(run_id, StageName.STORYBOARD)
-        if state is None or state.status != StageStatus.DONE:
-            raise ValueError(f"Run {run_id} has no storyboard; run the storyboard stage first")
-        return Storyboard(**state.output)
+            add_cost(self._assets, run_id, stage, provider, model, cost, target_id, units, unit)
 
     def _sheets_from(self, output: dict) -> dict[str, dict[str, Asset]]:
         return {t: {v: self._assets.assets.get(a) for v, a in views.items()} for t, views in output["sheets"].items()}

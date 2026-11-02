@@ -5,7 +5,6 @@ from src.core.configs import Settings
 from src.repository.asset.asset_repository import AssetRepository
 from src.repository.run.run_repository import RunRepository
 from src.repository.song.song_repository import SongRepository
-from src.schema.asset.cost_entry_schema import CostEntry
 from src.schema.base_schema import utcnow
 from src.schema.enums import StageName, StageStatus
 from src.schema.lesson.lesson_schema import GradeBand, LessonDraft, LessonPlan, LineTag, VideoType
@@ -14,7 +13,8 @@ from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_analysis_schema import LyricLine
 from src.service.lesson.lesson_prompt import PROMPT_VERSION, SYSTEM, user_prompt
 from src.service.lesson.lesson_rules import allowed_types, problems
-from src.service.llm.llm_service import LlmCall, LlmError, LlmService
+from src.service.llm.llm_service import LlmError, LlmService
+from src.service.stage.stage_common import add_llm_cost, fail_stage
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +58,13 @@ class LessonService:
             draft, call = self._llm.parse(model, SYSTEM, prompt, LessonDraft,
                                           check=lambda d: problems(d, lines, band, types))
         except LlmError as exc:
-            self._log_cost(run.id, exc.call)
-            self._fail(state, exc)
+            add_llm_cost(self._assets, run.id, StageName.LESSON, exc.call)
+            fail_stage(self._runs, state, exc, logger, "lesson")
             raise
         except Exception as exc:
-            self._fail(state, exc)
+            fail_stage(self._runs, state, exc, logger, "lesson")
             raise
-        self._log_cost(run.id, call)
+        add_llm_cost(self._assets, run.id, StageName.LESSON, call)
         unclear = {l.index for l in lines if l.unclear}
         for entry in draft.lines:                         # intake decides what is unclear, not the model
             if entry.index in unclear:
@@ -87,14 +87,3 @@ class LessonService:
         if song is None or song.analysis_id is None:
             raise LookupError(f"Run {run.id}'s song has not been analysed; run intake on it first")
         return self._songs.analyses.get(song.analysis_id).lines
-
-    def _log_cost(self, run_id: str, call: LlmCall) -> None:
-        if call.attempts:
-            self._assets.cost_entries.add(CostEntry(
-                run_id=run_id, stage=StageName.LESSON, provider=call.provider, model=call.model,
-                cost_usd=call.cost_usd, units=call.input_tokens + call.output_tokens, unit="tokens"))
-
-    def _fail(self, state: StageState, exc: Exception) -> None:
-        state.status, state.error, state.finished_at = StageStatus.FAILED, str(exc) or type(exc).__name__, utcnow()
-        self._runs.stage_states.update(state)
-        logger.error("lesson %s: failed: %s", state.run_id[:8], state.error)
