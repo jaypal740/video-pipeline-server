@@ -50,7 +50,7 @@ def serve(host: str = typer.Option("127.0.0.1", "--host"), port: int = typer.Opt
 @key_app.command("create")
 def key_create(
     name: str = typer.Argument(..., help="The product the key is for, e.g. jamwise."),
-    monthly_cap: float | None = typer.Option(None, "--monthly-cap", help="Monthly spend cap in USD."),
+    monthly_cap: float | None = typer.Option(None, "--monthly-cap", help="Monthly spend cap in USD (saved, not enforced yet)."),
 ) -> None:
     """Issue a key. It is printed once and never stored; copy it now."""
     key, raw = container.auth_service().create(name, monthly_cap)
@@ -260,7 +260,7 @@ def host_draw(band: GradeBand, count: int = typer.Option(3, "--count", help="How
 
 @host_app.command("approve")
 def host_approve(band: GradeBand, asset_id: str) -> None:
-    """Keep this candidate as the band's host, then draw its other views and its place."""
+    """Keep this candidate as the band's host, then draw its other views."""
     for asset in container.sheet_service().approve_host(band, asset_id):
         typer.echo(f"  {asset.params['view']:14s} {asset.review:12s} {asset.path}")
 

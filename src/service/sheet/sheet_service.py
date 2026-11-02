@@ -37,7 +37,8 @@ USABLE = (ReviewState.PASSED, ReviewState.APPROVED, ReviewState.USED_BEST)
 class SheetService:
     """Stage 4a: reference sheets. The band's host is drawn once and approved by a person; every other
     sheet in that band is drawn with the host's front view as a style reference, checked against its own
-    look, and kept only if it passes. Nothing that fails is ever attached to another picture."""
+    look, and kept if it passes, else its best try at or above the floor score. Nothing that fails is ever
+    attached to another picture."""
 
     def __init__(self, run_repository: RunRepository, asset_repository: AssetRepository, storage: Storage,
                  images: FalImageService, check: ImageCheckService, settings: Settings) -> None:
