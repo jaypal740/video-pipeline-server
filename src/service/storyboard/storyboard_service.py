@@ -5,7 +5,6 @@ from src.core.configs import Settings
 from src.repository.asset.asset_repository import AssetRepository
 from src.repository.run.run_repository import RunRepository
 from src.repository.song.song_repository import SongRepository
-from src.schema.asset.cost_entry_schema import CostEntry
 from src.schema.base_schema import utcnow
 from src.schema.enums import StageName, StageStatus
 from src.schema.lesson.lesson_schema import BandRules, FormatRules, LessonPlan
@@ -15,7 +14,8 @@ from src.schema.song.song_analysis_schema import SongAnalysis
 from src.schema.storyboard.storyboard_schema import (CastKind, CastMember, ShotPatch, Slot, Storyboard,
                                                      StoryboardDraft)
 from src.service.lesson.lesson_rules import band_rules, format_rules
-from src.service.llm.llm_service import LlmCall, LlmError, LlmService
+from src.service.llm.llm_service import LlmError, LlmService
+from src.service.stage.stage_common import add_llm_cost, fail_stage
 from src.service.storyboard.storyboard_prompt import PROMPT_VERSION, SYSTEM, patch_prompt, user_prompt
 from src.service.storyboard.storyboard_rules import (assemble, fix, header_problems, host_for, shot_problems,
                                                      wanted, wardrobe_for)
@@ -71,7 +71,7 @@ class StoryboardService:
             draft, call = self._llm.parse(model, SYSTEM, prompt, StoryboardDraft,
                                           check=lambda d: header_problems(d, band, slots),
                                           max_attempts=1 + MAX_HEADER_REASKS)
-            spent += self._log_cost(run.id, call)
+            spent += add_llm_cost(self._assets, run.id, StageName.STORYBOARD, call)
             reasks = 0
             problems = self._checked(draft, slots, band, fmt, host)
             while problems and reasks < MAX_REASKS:
@@ -81,7 +81,7 @@ class StoryboardService:
                                          for p in found))
                 patch, call = self._llm.parse(model, SYSTEM, patch_prompt(prompt, draft, problems), ShotPatch,
                                               max_attempts=1)
-                spent += self._log_cost(run.id, call)
+                spent += add_llm_cost(self._assets, run.id, StageName.STORYBOARD, call)
                 logger.info("storyboard %s: re-ask %d returned %s", run.id[:8], reasks,
                             sorted(s.slot for s in patch.shots))
                 patched = {s.slot: s for s in patch.shots if s.slot in problems}
@@ -99,11 +99,11 @@ class StoryboardService:
             draft.places = [p for p in draft.places if p.id in used]          # unused places are dropped
             shots, flags = assemble(draft, slots, host)
         except LlmError as exc:
-            self._log_cost(run.id, exc.call)
-            self._fail(state, exc)
+            add_llm_cost(self._assets, run.id, StageName.STORYBOARD, exc.call)
+            fail_stage(self._runs, state, exc, logger, "storyboard")
             raise
         except Exception as exc:
-            self._fail(state, exc)
+            fail_stage(self._runs, state, exc, logger, "storyboard")
             raise
         board = Storyboard(grade_band=plan.grade_band, video_type=plan.video_type, shape=draft.shape,
                            cast=[host] + draft.cast, places=draft.places, motifs=draft.motifs, shots=shots,
@@ -151,15 +151,3 @@ class StoryboardService:
         if song is None or song.analysis_id is None:
             raise LookupError(f"Run {run.id}'s song has not been analysed; run intake on it first")
         return self._songs.analyses.get(song.analysis_id)
-
-    def _log_cost(self, run_id: str, call: LlmCall) -> float:
-        if call.attempts:
-            self._assets.cost_entries.add(CostEntry(
-                run_id=run_id, stage=StageName.STORYBOARD, provider=call.provider, model=call.model,
-                cost_usd=call.cost_usd, units=call.input_tokens + call.output_tokens, unit="tokens"))
-        return call.cost_usd
-
-    def _fail(self, state: StageState, exc: Exception) -> None:
-        state.status, state.error, state.finished_at = StageStatus.FAILED, str(exc) or type(exc).__name__, utcnow()
-        self._runs.stage_states.update(state)
-        logger.error("storyboard %s: failed: %s", state.run_id[:8], state.error)

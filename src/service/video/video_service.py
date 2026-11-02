@@ -1,7 +1,6 @@
 import hashlib
 import logging
 import tempfile
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -11,19 +10,19 @@ from src.core.configs import Settings
 from src.repository.asset.asset_repository import AssetRepository
 from src.repository.run.run_repository import RunRepository
 from src.schema.asset.asset_schema import Asset, ReviewState
-from src.schema.asset.cost_entry_schema import CostEntry
 from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
-from src.schema.image.image_check_schema import Brief, Correction
+from src.schema.image.image_check_schema import Brief
 from src.schema.run.stage_state_schema import StageState
-from src.schema.storyboard.storyboard_schema import Moves, Shot, ShotKind, Storyboard
+from src.schema.storyboard.storyboard_schema import Moves, Shot, ShotKind
 from src.service.image.image_check_service import ImageCheckService
-from src.service.keyframe.keyframe_prompt import CORRECTION, check_correction, correction_request
 from src.service.lesson.lesson_rules import band_rules
-from src.service.llm.llm_service import LabelledImage, LlmCall, LlmError, LlmService
+from src.service.llm.llm_service import LabelledImage, LlmCall, LlmService
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.sheet.sheet_prompt import Style
-from src.service.sheet.sheet_service import URL_SECONDS, USABLE
+from src.service.sheet.sheet_service import USABLE
+from src.service.stage.stage_common import (PASSED, StopLoss, add_cost, asset_url, keep_best, storyboard_of,
+                                            write_correction)
 from src.service.storage.storage_service import Storage
 from src.service.video.camera_move import move_filter
 from src.service.video.clip_checks import ClipCheckService, ClipChecks
@@ -33,8 +32,6 @@ from src.service.video.video_prices import video_model
 
 logger = logging.getLogger(__name__)
 
-PASSED = (ReviewState.PASSED, ReviewState.APPROVED)
-STOP_LOSS_AFTER = 8
 JUDGE_USD = 0.003                                             # three frames plus the keyframe on Haiku
 
 
@@ -78,7 +75,7 @@ class VideoService:
         self._settings = settings
 
     def run(self, run_id: str, force: bool = False) -> dict[str, Asset]:
-        board = self._board(run_id)
+        board = storyboard_of(self._runs, run_id)
         keyframes, ends = self._keyframes(run_id), self._end_keyframes(run_id)
         style, model = Style.of(band_rules(board.grade_band)), self._settings.video_model
         spec = video_model(model)
@@ -118,7 +115,7 @@ class VideoService:
                     "keyframes, %d repeats reused", run_id[:8], model, len(plans), sum(1 for p in plans if p[-1]),
                     len(moves), len(blocked), len(board.shots) - len(shots))
         self._errors: dict[str, str] = {}
-        self._lock, self._finished, self._failed, self._stopped = threading.Lock(), 0, 0, None
+        self._stop = StopLoss(self._settings.image_stop_loss, "clips")
         try:
             made = {s.id: self._camera(run_id, s, k) for s, k in moves}
             made.update(self._draw_all(run_id, model, plans))
@@ -151,7 +148,7 @@ class VideoService:
     def recheck(self, run_id: str) -> dict[str, Asset]:
         """Run the code checks and the judge again on every clip of this run that did not pass, with the
         current rules; nothing is drawn. The stage then keeps the best try of each shot or fails as before."""
-        board = self._board(run_id)
+        board = storyboard_of(self._runs, run_id)
         state = self._runs.stage(run_id, StageName.VIDEO)
         if state is None or not state.output:
             raise ValueError(f"Run {run_id} has no clips yet")
@@ -178,8 +175,8 @@ class VideoService:
                         LabelledImage(label="frame 3 of 3, the last", data=last),
                         LabelledImage(label="the keyframe it was animated from", data=self._storage.get(keyframe.path))]
                 checklist, call = self._check.check(middle, refs, brief)
-                self._cost(run_id, call.provider, call.model, call.cost_usd, shot.id,
-                           call.input_tokens + call.output_tokens, "tokens")
+                add_cost(self._assets, run_id, StageName.VIDEO, call.provider, call.model, call.cost_usd, shot.id,
+                         call.input_tokens + call.output_tokens, "tokens")
                 score, asked_for = checklist.score, [a.model_dump() for a in checklist.asked_for]
                 problems, notes = self._check.problems(checklist, brief), self._check.notes(checklist)
             asset.params = {**asset.params, "score": score, "asked_for": asked_for, "checks": checks.problems,
@@ -213,27 +210,11 @@ class VideoService:
         return state.run_id if shot_id in state.output.get("blocked", []) else None
 
     def _keep(self, shot_id: str, tries: list[Asset]) -> Asset | None:
-        """The best passed try; else the best try at or above the floor (used_best); else the shot fails.
-        A clip the code checks failed has no score and is never used."""
-        passed = [a for a in tries if a.review in PASSED]
-        if passed:
-            return max(passed, key=lambda a: a.params.get("score") or 0)
+        """Which of a shot's tries the stage uses (see keep_best). A clip the code checks failed has no score
+        and is never used."""
         scored = [a for a in tries if a.params.get("score") is not None]
-        best = max(scored or tries, key=lambda a: a.params.get("score") or 0)
-        for a in tries:
-            review = (ReviewState.USED_BEST if a is best and scored
-                      and (a.params.get("score") or 0) >= self._settings.image_floor_score else ReviewState.FAILED)
-            if a.review != review:
-                a.review = a.review if a.review == ReviewState.APPROVED else review
-                self._assets.assets.update(a)
-        if best.review == ReviewState.USED_BEST:
-            logger.warning("clip %s: no try passed; using the best, %s/10: %s", shot_id, best.params.get("score"),
-                           (best.review_notes or "").splitlines()[0] if best.review_notes else "")
-            return best
-        self._errors[shot_id] = (f"failed every draw; best {best.params.get('score')}/10: "
-                                 + "; ".join((best.review_notes or "").splitlines()))
-        logger.error("clip %s: %s", shot_id, self._errors[shot_id])
-        return None
+        return keep_best(self._assets, self._settings.image_floor_score, logger, "clip", shot_id, tries,
+                         self._errors, scored, pool_only=True)
 
     # --- drawing ------------------------------------------------------------------------------------------
 
@@ -258,8 +239,8 @@ class VideoService:
         if not todo:
             return made
         self._guard_spend(run_id, model, [n for _, _, _, n, *_ in todo])
-        urls = {k.id: self._url(k) for _, _, k, *_ in todo}
-        urls.update({e.id: self._url(e) for *_, e in todo if e is not None})
+        urls = {k.id: asset_url(self._storage, self._video.upload, k) for _, _, k, *_ in todo}
+        urls.update({e.id: asset_url(self._storage, self._video.upload, e) for *_, e in todo if e is not None})
         frames = {k.id: self._storage.get(k.path) for _, _, k, *_ in todo}
         with ThreadPoolExecutor(max_workers=self._settings.video_workers) as pool:
             futures = {pool.submit(self._attempts, model, urls[k.id], frames[k.id], *job[:-1],
@@ -274,14 +255,14 @@ class VideoService:
                     self._errors[shot.id] = str(exc)
                     continue
                 if not tries:
-                    self._errors[shot.id] = self._stopped
+                    self._errors[shot.id] = self._stop.reason
                     continue
                 kept = self._store_attempts(run_id, shot, keyframe, tries, end)
                 if kept is not None:
                     made[shot.id] = kept
-        if self._stopped:
-            logger.error("video %s: %s; %d clips not drawn", run_id[:8], self._stopped,
-                         sum(1 for e in self._errors.values() if e == self._stopped))
+        if self._stop.reason:
+            logger.error("video %s: %s; %d clips not drawn", run_id[:8], self._stop.reason,
+                         sum(1 for e in self._errors.values() if e == self._stop.reason))
         return made
 
     def _guard_spend(self, run_id: str, model: str, seconds: list[int]) -> None:
@@ -302,11 +283,12 @@ class VideoService:
                   end_url: str | None) -> list[Attempt]:
         """Network only: draw between the start and end frames, drop the audio, check by code, judge on three
         frames, retry on a new seed with a correction."""
-        if self._stopped:
+        if self._stop.reason:
             return []
         tries = []
         for attempt, seed, cache_key in seeds:
-            correction, fix = self._correction(shot, prompt, brief, findings) if findings else (None, None)
+            correction, fix = (write_correction(self._llm, self._settings.image_check_model, logger, "clip", shot.id,
+                                                prompt, brief, findings) if findings else (None, None))
             drawn = f"{prompt} {correction}" if correction else prompt
             reply = self._video.generate(model, drawn, url, seconds, seed=seed, negative=NEGATIVE, end_image_url=end_url)
             reply.data = self._silent(reply.data)               # the models make up speech; the song is the sound
@@ -328,33 +310,13 @@ class VideoService:
                                  check=call, cache_key=cache_key))
             if not problems:
                 logger.info("clip %s: passed on try %d, $%.3f, %.0fs", shot.id, attempt, reply.cost_usd, reply.seconds)
-                self._count(passed=True)
+                self._stop.count(passed=True)
                 return tries
             logger.warning("clip %s: try %d failed %d checks:\n%s", shot.id, attempt, len(problems),
                            "\n".join(f"  - {p}" for p in problems))
         logger.warning("clip %s: no try passed after %d", shot.id, len(seeds))
-        self._count(passed=False)
+        self._stop.count(passed=False)
         return tries
-
-    def _correction(self, shot: Shot, prompt: str, brief: Brief, findings: list[str]) -> tuple[str | None, LlmCall | None]:
-        try:
-            fix, call = self._llm.parse(self._settings.image_check_model, CORRECTION,
-                                        correction_request(prompt, brief.moment or "", findings), Correction,
-                                        check=check_correction, effort="low")
-        except LlmError as exc:
-            logger.warning("clip %s: no correction, retrying the plain prompt: %s", shot.id, exc)
-            return None, exc.call
-        logger.info("clip %s: retry corrected: %s", shot.id, fix.text)
-        return fix.text, call
-
-    def _count(self, passed: bool) -> None:
-        with self._lock:
-            self._finished += 1
-            self._failed += not passed
-            if self._finished == STOP_LOSS_AFTER and self._failed > STOP_LOSS_AFTER * self._settings.image_stop_loss \
-                    and not self._stopped:
-                self._stopped = (f"stopped: {self._failed} of the first {self._finished} clips failed every draw; "
-                                 "fix the cause before drawing more")
 
     def _store_attempts(self, run_id: str, shot: Shot, keyframe: Asset, tries: list[Attempt],
                         end: Asset | None) -> Asset | None:
@@ -377,18 +339,15 @@ class VideoService:
                         "score": t.score, "asked_for": t.asked_for, "correction": t.correction},
                 cost_usd=t.reply.cost_usd, review=ReviewState.PASSED if not t.problems else ReviewState.FAILED,
                 review_notes="\n".join(t.notes) or None))
-            self._cost(run_id, self._video.name, t.reply.model, t.reply.cost_usd, shot.id, t.reply.seconds_requested,
-                       "second")
+            add_cost(self._assets, run_id, StageName.VIDEO, self._video.name, t.reply.model, t.reply.cost_usd, shot.id,
+                     t.reply.seconds_requested, "second")
             for call in (c for c in (t.check, t.fix) if c is not None):
-                self._cost(run_id, call.provider, call.model, call.cost_usd, shot.id,
-                           call.input_tokens + call.output_tokens, "tokens")
+                add_cost(self._assets, run_id, StageName.VIDEO, call.provider, call.model, call.cost_usd, shot.id,
+                         call.input_tokens + call.output_tokens, "tokens")
             stored.append(asset)
         return self._keep(shot.id, stored)
 
     # --- small helpers ------------------------------------------------------------------------------------
-
-    def _url(self, asset: Asset) -> str:
-        return self._storage.url(asset.path, URL_SECONDS) or self._video.upload(self._storage.get(asset.path), "image/png")
 
     def _tries(self, model: str, prompt: str, keyframe: Asset, seconds: float,
                end: Asset | None) -> list[tuple[int, int, str]]:
@@ -444,16 +403,6 @@ class VideoService:
             src.write_bytes(data)
             self._ffmpeg.run(["-i", str(src), "-an", "-c:v", "copy", str(out)])
             return out.read_bytes()
-
-    def _cost(self, run_id: str, provider: str, model: str, cost: float, target_id: str, units: float, unit: str) -> None:
-        self._assets.cost_entries.add(CostEntry(run_id=run_id, stage=StageName.VIDEO, provider=provider, model=model,
-                                                cost_usd=cost, target_id=target_id, units=units, unit=unit))
-
-    def _board(self, run_id: str) -> Storyboard:
-        state = self._runs.stage(run_id, StageName.STORYBOARD)
-        if state is None or state.status != StageStatus.DONE:
-            raise ValueError(f"Run {run_id} has no storyboard; run the storyboard stage first")
-        return Storyboard(**state.output)
 
     def _keyframes(self, run_id: str) -> dict[str, Asset]:
         state = self._runs.stage(run_id, StageName.KEYFRAMES)

@@ -11,25 +11,24 @@ from src.repository.asset.asset_repository import AssetRepository
 from src.repository.run.run_repository import RunRepository
 from src.repository.song.song_repository import SongRepository
 from src.schema.asset.asset_schema import Asset, ReviewState
-from src.schema.asset.cost_entry_schema import CostEntry
 from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.image.image_check_schema import Brief
 from src.schema.run.stage_state_schema import StageState
-from src.schema.storyboard.storyboard_schema import Place, Shot, ShotKind, Storyboard
+from src.schema.storyboard.storyboard_schema import Place, Shot, ShotKind
 from src.service.image.image_check_service import ImageCheckService
 from src.service.lipsync.fal_lipsync_service import FalLipsyncService, LipsyncReply
 from src.service.lipsync.lipsync_prices import lipsync_model
 from src.service.llm.llm_service import LabelledImage, LlmCall
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.sheet.sheet_prompt import NO_OVERLAY_TEXT
-from src.service.sheet.sheet_service import URL_SECONDS, USABLE
+from src.service.sheet.sheet_service import USABLE
+from src.service.stage.stage_common import add_cost, asset_url, keep_best, storyboard_of
 from src.service.storage.storage_service import Storage
 from src.service.video.clip_checks import DURATION_SLACK, ClipChecks, ClipCheckService
 
 logger = logging.getLogger(__name__)
 
-PASSED = (ReviewState.PASSED, ReviewState.APPROVED)
 JUDGE_USD = 0.002                                             # one frame plus the keyframe on Haiku
 KEYFRAME_LABEL = "the keyframe it was drawn from"
 
@@ -94,7 +93,7 @@ class LipsyncService:
         self._settings = settings
 
     def run(self, run_id: str, force: bool = False) -> dict[str, Asset]:
-        board = self._board(run_id)
+        board = storyboard_of(self._runs, run_id)
         keyframes = self._keyframes(run_id)
         model = self._settings.lipsync_model
         spec = lipsync_model(model)
@@ -155,27 +154,11 @@ class LipsyncService:
                    self._assets.run_cost(run_id), (state.finished_at - state.started_at).total_seconds())
 
     def _keep(self, shot_id: str, tries: list[Asset]) -> Asset | None:
-        """The best passed try; else the best try at or above the floor (used_best); else the shot fails.
-        A clip the code checks failed has no score and is never used."""
-        passed = [a for a in tries if a.review in PASSED]
-        if passed:
-            return max(passed, key=lambda a: a.params.get("score") or 0)
+        """Which of a shot's tries the stage uses (see keep_best). A clip the code checks failed has no score
+        and is never used."""
         scored = [a for a in tries if a.params.get("score") is not None]
-        best = max(scored or tries, key=lambda a: a.params.get("score") or 0)
-        for a in tries:
-            review = (ReviewState.USED_BEST if a is best and scored
-                      and (a.params.get("score") or 0) >= self._settings.image_floor_score else ReviewState.FAILED)
-            if a.review != review:
-                a.review = a.review if a.review == ReviewState.APPROVED else review
-                self._assets.assets.update(a)
-        if best.review == ReviewState.USED_BEST:
-            logger.warning("lipsync %s: no try passed; using the best, %s/10: %s", shot_id, best.params.get("score"),
-                           (best.review_notes or "").splitlines()[0] if best.review_notes else "")
-            return best
-        self._errors[shot_id] = (f"failed every draw; best {best.params.get('score')}/10: "
-                                 + "; ".join((best.review_notes or "").splitlines()))
-        logger.error("lipsync %s: %s", shot_id, self._errors[shot_id])
-        return None
+        return keep_best(self._assets, self._settings.image_floor_score, logger, "lipsync", shot_id, tries,
+                         self._errors, scored, pool_only=True)
 
     # --- drawing ------------------------------------------------------------------------------------------
 
@@ -199,7 +182,7 @@ class LipsyncService:
             return made
         self._guard_spend(run_id, model, [n for _, _, _, n, *_ in todo])
         song = self._songs.songs.get(self._runs.runs.get(run_id).song_id)
-        images = {k.id: self._url(k) for _, k, *_ in todo}
+        images = {k.id: asset_url(self._storage, self._lipsync.upload, k) for _, k, *_ in todo}
         frames = {k.id: self._storage.get(k.path) for _, k, *_ in todo}
         audio = {s.id: self._lipsync.upload(self._cut(song.audio_path, s.start, n), "audio/mp4")
                  for s, _, _, n, *_ in todo}
@@ -277,10 +260,11 @@ class LipsyncService:
                         "wall": t.reply.seconds, "checks": t.code_problems, "score": t.score, "asked_for": t.asked_for},
                 cost_usd=t.reply.cost_usd, review=ReviewState.PASSED if not t.problems else ReviewState.FAILED,
                 review_notes="\n".join(t.notes) or None))
-            self._cost(run_id, self._lipsync.name, t.reply.model, t.reply.cost_usd, shot.id, audio_seconds, "second")
+            add_cost(self._assets, run_id, StageName.LIPSYNC, self._lipsync.name, t.reply.model, t.reply.cost_usd,
+                     shot.id, audio_seconds, "second")
             if t.check is not None:
-                self._cost(run_id, t.check.provider, t.check.model, t.check.cost_usd, shot.id,
-                           t.check.input_tokens + t.check.output_tokens, "tokens")
+                add_cost(self._assets, run_id, StageName.LIPSYNC, t.check.provider, t.check.model, t.check.cost_usd,
+                         shot.id, t.check.input_tokens + t.check.output_tokens, "tokens")
             stored.append(asset)
         return self._keep(shot.id, stored)
 
@@ -303,25 +287,12 @@ class LipsyncService:
             self._ffmpeg.run(["-i", str(src), "-an", "-c:v", "copy", str(out)])
             return out.read_bytes()
 
-    def _url(self, asset: Asset) -> str:
-        return self._storage.url(asset.path, URL_SECONDS) or self._lipsync.upload(self._storage.get(asset.path), "image/png")
-
     def _tries(self, model: str, shot: Shot, keyframe: Asset, audio_seconds: float) -> list[tuple[int, int, str]]:
         """A shot's tries in order: try number, seed and cache key, from the keyframe and the audio sent."""
         what = f"{keyframe.sha256}|{shot.start}|{audio_seconds}"
         base = int(hashlib.sha256(what.encode()).hexdigest()[:8], 16) % 2**31
         return [(i + 1, base + i, hashlib.sha256(f"{model}|{what}|{base + i}".encode()).hexdigest())
                 for i in range(self._settings.image_max_tries)]
-
-    def _cost(self, run_id: str, provider: str, model: str, cost: float, target_id: str, units: float, unit: str) -> None:
-        self._assets.cost_entries.add(CostEntry(run_id=run_id, stage=StageName.LIPSYNC, provider=provider, model=model,
-                                                cost_usd=cost, target_id=target_id, units=units, unit=unit))
-
-    def _board(self, run_id: str) -> Storyboard:
-        state = self._runs.stage(run_id, StageName.STORYBOARD)
-        if state is None or state.status != StageStatus.DONE:
-            raise ValueError(f"Run {run_id} has no storyboard; run the storyboard stage first")
-        return Storyboard(**state.output)
 
     def _keyframes(self, run_id: str) -> dict[str, Asset]:
         state = self._runs.stage(run_id, StageName.KEYFRAMES)
