@@ -2,7 +2,7 @@ import pytest
 
 from src.schema.lesson.lesson_schema import GradeBand, VideoType
 from src.schema.storyboard.storyboard_schema import (Angle, Camera, CameraMove, CastKind, CastMember, Continuity,
-                                                     Direction, Motif, Motion, Place, Position, Scale,
+                                                     Direction, Motif, Motion, Moves, Place, Position, Scale,
                                                      ScreenDirection, ShotDraft, ShotKind, ShotSize, Slot, Speed,
                                                      StoryboardDraft, Transition)
 from src.service.lesson.lesson_rules import band_rules, format_rules
@@ -75,6 +75,17 @@ def test_code_fixes_camera_sung_and_number_framing():
     k2 = shot("s03", camera=Camera(move=CameraMove.ORBIT, direction=Direction.LEFT))
     fix(k2, s[2], band_rules(GradeBand.K_2), people=set())
     assert k2.camera.move == CameraMove.STATIC
+
+
+def test_a_camera_shot_needs_a_camera_move_and_a_sung_shot_is_never_one():
+    s = slots(ShotKind.ILLUSTRATE, ShotKind.ILLUSTRATE, ShotKind.SUNG)
+    still = shot("s01", size=ShotSize.WIDE, moves=Moves.CAMERA)
+    tilt = shot("s02", moves=Moves.CAMERA, camera=Camera(move=CameraMove.TILT, direction=Direction.UP))
+    sung = shot("s03", moves=Moves.CAMERA, camera=Camera(move=CameraMove.PUSH_IN))
+    fix(sung, s[2], BAND, people=set())
+    found = shot_problems(board(still, tilt), s[:2], BAND, FMT, HOST)
+    assert list(found) == ["s01"] and "camera is static" in found["s01"][0]
+    assert sung.moves == Moves.SUBJECT
 
 
 def test_film_grammar_is_checked():

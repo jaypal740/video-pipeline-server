@@ -20,8 +20,19 @@ class Settings(BaseSettings):
     host_model: str = Field(default="gpt-image-2", validation_alias="PIPELINE_HOST_MODEL")
     keyframe_model: str = Field(default="nano-banana-2.1", validation_alias="PIPELINE_KEYFRAME_MODEL")
     image_check_model: str = Field(default="claude-haiku-5-5", validation_alias="PIPELINE_IMAGE_CHECK_MODEL")
+    # When every try of a keyframe fails, its best try is judged once more by this stronger model before the
+    # shot fails; None turns the second opinion off.
+    image_second_opinion_model: str | None = Field(default="claude-sonnet-5-5",
+                                                   validation_alias="PIPELINE_IMAGE_SECOND_OPINION_MODEL")
     # When the image model returns nothing (a filter, an outage), the same draw is tried once on this model.
     image_fallback_model: str | None = Field(default="gpt-image-2", validation_alias="PIPELINE_IMAGE_FALLBACK_MODEL")
+    # Video clips: one per shot from its keyframe. The model is set after the bake-off; a clip is asked for at
+    # length_factor x the shot and trimmed at assembly; sung shots get a calm clip (lip-sync comes later) or none.
+    video_model: str = Field(default="kling-o3-standard", validation_alias="PIPELINE_VIDEO_MODEL")
+    video_fallback_model: str | None = Field(default="wan-3", validation_alias="PIPELINE_VIDEO_FALLBACK_MODEL")
+    video_workers: int = Field(default=2, validation_alias="PIPELINE_VIDEO_WORKERS")
+    video_length_factor: float = Field(default=1.4, validation_alias="PIPELINE_VIDEO_LENGTH_FACTOR")
+    video_sung_mode: str = Field(default="calm", validation_alias="PIPELINE_VIDEO_SUNG_MODE")
     image_workers: int = Field(default=4, validation_alias="PIPELINE_IMAGE_WORKERS")
     # The judge's 0-10 score an image needs to pass; below it the image is drawn again. The judge gives a 6
     # to "the right picture with one small difference", which is good enough for a viewer.

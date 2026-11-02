@@ -68,10 +68,11 @@ def keyframe_brief(shot: Shot, place: Place, subjects: list[CastMember]) -> Brie
     which the judge reads and writes its own checks from; the rules here hold for every shot."""
     who = ", ".join(m.id.replace("_", " ") for m in subjects) or "none, the moment and the place carry the shot"
     description = (f"The opening moment above, before anything has happened. The place is {place.look}, "
-                   f"{place.lighting}. Cast members with a reference image: {who}. Framing: a "
+                   f"{place.lighting}; where the opening moment differs from the place's usual look, the moment "
+                   f"wins. Cast members with a reference image: {who}. Framing: a "
                    f"{_SIZE_WORDS[shot.size].lower()} with {_POSITION_WORDS[shot.position]}.")
     rules = [f"The setting is the same place as in the image labelled '{ref_label('place', place.id)}': same ground, "
-             "sky, landmarks and light; things the opening moment adds to it are fine"]
+             "sky, landmarks and light; things the opening moment adds to it or changes in it are fine"]
     for m in subjects:                                          # the judge finds each reference by its label
         rules.append(f"The {m.id.replace('_', ' ')} is the same one as in the image labelled '{ref_label('cast member', m.id)}': "
                      f"same {'face, hair and clothes' if m.kind == CastKind.PERSON else 'shape, colours and materials'}")
@@ -79,3 +80,51 @@ def keyframe_brief(shot: Shot, place: Place, subjects: list[CastMember]) -> Brie
     rules += fatal + ["No face, eyes, mouth or human expression on anything that is not a person",
                       "Nothing warped, melted together or broken; suitable for school children"]
     return Brief(description=description, rules=rules, fatal=fatal, moment=shot.start_state)
+
+
+# A chained picture is an edit of the picture before it: the previous shot's last frame for a linked opening,
+# the shot's own opening for its ending. The judge finds that picture by these labels.
+LINK_LABEL = "the previous shot's last frame"
+START_LABEL = "the start keyframe"
+
+
+def linked_prompt(style: Style, shot: Shot, subjects: list[CastMember]) -> str:
+    """The opening of a shot that carries on from the shot before in the same place: image 1 is where that
+    shot ended, kept as it is apart from the new framing and what the opening moment says."""
+    named = ", ".join(f"{m.id.replace('_', ' ')} is image {i}" for i, m in enumerate(subjects, start=2))
+    lines = [f"{style.name} illustration, {_SIZE_WORDS[shot.size].lower()}, {_ANGLE_WORDS[shot.angle]}.",
+             "Image 1 is the last frame of the shot before, in the same place: keep its place, light, designs and "
+             "the state of everything in it, framed anew."]
+    if subjects:
+        lines.append(f"{named[0].upper()}{named[1:]}, {_POSITION_WORDS[shot.position]}.")
+    lines.append(shot.start_state.rstrip(".") + ".")
+    lines.append(f"The design features {style.features}. Keep every design exactly as in the references.")
+    return " ".join(lines)
+
+
+def end_prompt(style: Style, shot: Shot) -> str:
+    """The last frame of a shot, drawn from its opening (image 1): the same framing and designs, with the
+    shot's end_state. The video model then animates from one to the other."""
+    return (f"{style.name} illustration. Image 1 is the opening frame of this shot. Draw the same shot a few seconds "
+            f"later: the same place, the same camera framing, the same designs, colours and line style. Now: "
+            f"{shot.end_state.rstrip('.')}. Keep everything that does not change exactly as in image 1.")
+
+
+def linked_brief(shot: Shot, place: Place, subjects: list[CastMember]) -> Brief:
+    """A linked opening is judged like any keyframe, but its setting and state come from the picture before."""
+    brief = keyframe_brief(shot, place, subjects)
+    brief.rules[0] = (f"The place, light, designs and the state of things are the same as in the image labelled "
+                      f"'{LINK_LABEL}'; only the framing and what the opening moment says may differ")
+    return brief
+
+
+def end_brief(shot: Shot) -> Brief:
+    """An ending is judged against end_state, in the framing and style of the shot's own opening."""
+    fatal = [NO_OVERLAY_TEXT, f"No person or character that is not in the image labelled '{START_LABEL}'"]
+    return Brief(description=(f"The last frame of a short shot whose first frame is the image labelled '{START_LABEL}'. "
+                              f"The action between them: {shot.action} Judge whether this picture shows the ending "
+                              "below, in the same place, framing and style as the start keyframe."),
+                 rules=[f"Same place, camera framing, line style and colours as the image labelled '{START_LABEL}'",
+                        "Every thing and person kept from the start keyframe has the same design", *fatal,
+                        "No face, eyes, mouth or human expression on anything that is not a person"],
+                 fatal=fatal, moment=f"(This is the ending of the shot, not its opening.) {shot.end_state}")

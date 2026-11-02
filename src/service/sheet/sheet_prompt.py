@@ -75,10 +75,10 @@ def sheet_prompt(style: Style, member: CastMember, view: str, reference: str | N
     look = member.look.rstrip(".")
     look = look[0].lower() + look[1:]
     if member.kind != CastKind.PERSON:
-        text = (f"{style.name} illustration of a single {member.id.replace('_', ' ')}: {look}. It rests alone at the "
+        text = (f"{style.name} illustration of the {member.id.replace('_', ' ')}: {look}. Shown as described, at the "
                 f"centre of a plain pale-grey studio surface, seen from its most recognisable side, slightly from "
                 f"above. The design features {style.features}. Even soft lighting with a faint contact shadow "
-                "beneath it; the rest of the frame is blank grey.")
+                "beneath; the rest of the frame is blank grey.")
     elif view in FACE_VIEWS:
         text = (f"{style.name} character design of {look}, a head-and-shoulders portrait facing the viewer directly "
                 f"with {_FACE[view]}, eyes looking into the lens. The design features {style.features}. The face "
@@ -120,14 +120,15 @@ def sheet_brief(member: CastMember, view: str) -> Brief:
         rules = [f"{whole} and the view is: {angle}", *fatal,
                  "Nothing warped or duplicated; suitable for school children"]
     else:
-        description = (f"A single {member.id.replace('_', ' ')}: {member.look}. Judge the kind of object, its overall "
-                       "shape, its main colours and materials; small details such as edge sharpness, reflections and "
-                       "texture only shade the score.")
+        description = (f"The {member.id.replace('_', ' ')}: {member.look}. Judge the kind of object, how many there "
+                       "are as the description says, its overall shape, its main colours and materials; small details "
+                       "such as edge sharpness, reflections and texture only shade the score.")
         fatal = [NO_TEXT_ON_SUBJECT]
-        rules = ["Exactly one object on a plain single-colour ground (a soft contact shadow is fine): no scene or extra objects",
-                 "The whole object is in frame", *fatal,
-                 "The object has no face, eyes, mouth or human expression; it looks like the real thing",
-                 "Nothing warped or duplicated; suitable for school children"]
+        rules = ["As many items as the description says (one, unless it describes several of the same item) on a "
+                 "plain single-colour ground (a soft contact shadow is fine): no scene and nothing it does not describe",
+                 "The whole subject is in frame", *fatal,
+                 "The subject has no face, eyes, mouth or human expression; it looks like the real thing",
+                 "Nothing warped and no copies beyond what the description says; suitable for school children"]
     return Brief(description=description, rules=rules, fatal=fatal)
 
 

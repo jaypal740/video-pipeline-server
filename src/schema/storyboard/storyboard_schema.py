@@ -104,6 +104,14 @@ class ScreenDirection(StrEnum):
     NONE = "none"
 
 
+class Moves(StrEnum):
+    """What carries the shot: something in the picture moves or changes (subject), or the picture stays as
+    it is and only the camera moves (camera), which code renders from the keyframe without a video model."""
+
+    SUBJECT = "subject"
+    CAMERA = "camera"
+
+
 class Transition(StrEnum):
     CUT = "cut"
     MATCH_CUT = "match_cut"
@@ -184,6 +192,7 @@ class ShotDraft(BaseModel):
     motion: Motion
     screen_direction: ScreenDirection
     transition_in: Transition
+    moves: Moves = Moves.SUBJECT                 # boards written before this field are all subject shots
 
 
 class StoryboardDraft(BaseModel):

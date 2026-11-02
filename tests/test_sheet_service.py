@@ -12,8 +12,10 @@ from src.schema.lesson.lesson_schema import GradeBand, VideoType
 from src.schema.run.run_schema import Run
 from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_schema import Song
+from src.schema.storyboard.storyboard_schema import CastKind, CastMember, Scale
 from src.service.image.fal_image_service import ImageReply
 from src.service.llm.llm_service import ProviderReply
+from src.service.sheet.sheet_prompt import Style, sheet_brief, sheet_prompt
 from src.service.storage.storage_service import LocalStorage
 
 BOARD = {
@@ -227,3 +229,13 @@ def test_the_same_sheet_is_reused_not_redrawn(stage, container):
     assert sheets["ship"]["front"].params["reused_from"]
     service.run(second.id)
     assert len(fal.calls) == drawn                                                # the stage itself is cached too
+
+
+def test_a_thing_is_drawn_and_judged_as_many_as_its_description_says():
+    group = CastMember(id="air_molecules", kind=CastKind.THING, look="Tiny pale grey spheres joined in pairs",
+                       size="tiny", scale=Scale.MOLECULAR)
+    text = sheet_prompt(Style(name="Flat cartoon", features="crisp outlines"), group, "front", None)
+    assert "single" not in text and "alone" not in text
+    assert "illustration of the air molecules: tiny pale grey spheres joined in pairs" in text
+    rules = " ".join(sheet_brief(group, "front").rules)
+    assert "Exactly one object" not in rules and "As many items as the description says" in rules

@@ -3,7 +3,7 @@ import tomllib
 
 from src.schema.lesson.lesson_schema import BandRules, FormatRules, GradeBand, VideoType
 from src.schema.storyboard.storyboard_schema import (Angle, CameraMove, CastKind, CastMember, Continuity, Direction,
-                                                     Motion, Place, Position, Scale, ScreenDirection, Shot, ShotDraft,
+                                                     Motion, Moves, Place, Position, Scale, ScreenDirection, Shot, ShotDraft,
                                                      ShotKind, ShotSize, Slot, Speed, StoryboardDraft, Transition)
 from src.service.lesson.lesson_rules import TEMPLATES
 
@@ -136,6 +136,7 @@ def fix(shot: ShotDraft, slot: Slot, band: BandRules, people: set[str]) -> list[
         shot.subjects = [HOST] + [s for s in shot.subjects if s != HOST and s not in people][:1]
         shot.angle, shot.position, shot.motion = Angle.EYE, Position.CENTRE, Motion.LOW
         shot.screen_direction = ScreenDirection.NONE
+        shot.moves = Moves.SUBJECT                              # the host sings; lip-sync needs the face
         if shot.size not in _SUNG_SIZES:
             shot.size = ShotSize.MEDIUM_CLOSE
         if cam.move not in (CameraMove.STATIC, CameraMove.PUSH_IN):
@@ -207,6 +208,8 @@ def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fm
         if HOST in shot.subjects and slot.kind != ShotKind.SUNG and fmt.type != VideoType.PERSONALISED_HERO:
             add(slot.id, f"the host appears only in sung shots in a {fmt.type} video")
         move, direction = shot.camera.move, shot.camera.direction
+        if shot.moves == Moves.CAMERA and move == CameraMove.STATIC:
+            add(slot.id, "moves is camera but the camera is static; give the camera a move, or set moves to subject")
         if move in _DIRECTIONS and direction not in _DIRECTIONS[move]:
             add(slot.id, f"camera {move} needs a direction from {sorted(_DIRECTIONS[move])}")
         for field in ("start_state", "action", "end_state"):

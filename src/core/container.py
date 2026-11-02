@@ -10,6 +10,9 @@ from src.repository.song.song_repository import SongRepository
 from src.service.auth.auth_service import AuthService
 from src.service.image.fal_image_service import FalImageService
 from src.service.image.image_check_service import ImageCheckService
+from src.service.video.clip_checks import ClipCheckService
+from src.service.video.fal_video_service import FalVideoService
+from src.service.video.video_service import VideoService
 from src.service.keyframe.keyframe_service import KeyframeService
 from src.service.intake.intake_service import IntakeService
 from src.service.intake.preview_service import PreviewService
@@ -65,6 +68,9 @@ class Container(containers.DeclarativeContainer):
     llm_service = providers.Singleton(LlmService, openai=openai_service, anthropic=anthropic_service)
     fal_image_service = providers.Singleton(FalImageService, api_key=settings.provided.fal_key,
                                             fallback_model=settings.provided.image_fallback_model)
+    fal_video_service = providers.Singleton(FalVideoService, api_key=settings.provided.fal_key,
+                                            fallback_model=settings.provided.video_fallback_model)
+    clip_check_service = providers.Singleton(ClipCheckService, ffmpeg=ffmpeg_service)
     image_check_service = providers.Singleton(ImageCheckService, llm=llm_service, settings=settings)
 
     # services
@@ -111,6 +117,17 @@ class Container(containers.DeclarativeContainer):
         images=fal_image_service,
         check=image_check_service,
         sheets=sheet_service,
+        llm=llm_service,
+        settings=settings,
+    )
+    video_service = providers.Singleton(
+        VideoService,
+        run_repository=run_repository,
+        asset_repository=asset_repository,
+        storage=storage,
+        video=fal_video_service,
+        checks=clip_check_service,
+        check=image_check_service,
         llm=llm_service,
         settings=settings,
     )

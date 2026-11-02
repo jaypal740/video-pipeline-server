@@ -4,7 +4,7 @@ from src.schema.storyboard.storyboard_schema import CastMember, ShotKind, Slot, 
 from src.service.storyboard.storyboard_rules import HOST, LIMITS
 
 # Bumped whenever the prompt changes, so every run is boarded again with the new prompt.
-PROMPT_VERSION = "storyboard.v8"
+PROMPT_VERSION = "storyboard.v9"
 
 SYSTEM = f"""You storyboard short educational music videos for school classes. The song, its lesson plan \
 and the shot timings already exist; you decide what each shot shows and how the camera films it. An image \
@@ -46,6 +46,8 @@ truck and orbit: left or right; tilt and pedestal: up or down; follow: left, rig
 (slow, medium, fast). One move per shot.
 - motion (low, medium, high), screen_direction (left_to_right, right_to_left, toward, away, none) and \
 transition_in (cut, match_cut, dissolve).
+- moves: subject when something in the picture moves or changes; camera when everything in the picture \
+stays as it is and only the camera moves over it.
 
 Rules:
 - Only people are characters. Cells, germs, molecules, animals, objects and ideas look and behave as they \
@@ -62,6 +64,8 @@ viewer sees where we are; a sung close-up of the host does not count.
 - Write a shot for every slot you are given, sung slots included. In a sung shot the host sings to camera \
 inside one of this video's walkable places, in the chosen outfit; declare a fitting walkable place if none \
 exists. Code only adjusts the framing.
+- In the same place, a shot starts where the shot before it ended: its start_state carries on from that \
+end_state, so the cut joins up.
 - Lighting stays the same within a shot; show time passing with a cut or a dissolve, never inside one clip.
 - Follow the lesson's idea for each line; change it only when continuity needs it, and keep what it teaches.
 - Use few places and come back to them: the video should feel like one connected film, not a slideshow."""

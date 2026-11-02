@@ -192,6 +192,27 @@ def run_keyframes(
                    + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
 
 
+@run_app.command("video")
+def run_video(
+    run_id: str,
+    force: bool = typer.Option(False, "--force", help="Draw again even if nothing changed."),
+) -> None:
+    """Stage 5a: one clip per shot, animated from its keyframe and checked."""
+    made = container.video_service().run(run_id, force=force)
+    for shot_id, asset in made.items():
+        typer.echo(f"  {shot_id}  {asset.review:12s} try {asset.params.get('try', 1)}  {asset.params.get('seconds', 0):.1f}s"
+                   f"  {asset.params.get('score')}/10  {asset.path}"
+                   + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
+
+
+@run_app.command("recheck-video")
+def run_recheck_video(run_id: str) -> None:
+    """Check the clips that did not pass again with the current rules; nothing is drawn."""
+    for shot_id, asset in container.video_service().recheck(run_id).items():
+        typer.echo(f"  {shot_id}  {asset.review:12s} try {asset.params.get('try', 1)}  {asset.params.get('score')}/10"
+                   + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
+
+
 @run_app.command("recheck")
 def run_recheck(run_id: str) -> None:
     """Judge the keyframes that did not pass again with the current brief; nothing is drawn."""

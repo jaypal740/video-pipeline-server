@@ -10,7 +10,9 @@ logger = logging.getLogger(__name__)
 CHECK_TRIES = 3
 
 SYSTEM = """You check one generated picture for an educational video for school children. Image 1 is the \
-picture to check; any further images are the reference sheets it was drawn from.
+picture to check; any further images are the reference sheets it was drawn from. When the description says \
+the images are frames of one clip, judge the clip as a whole from them: its start, what happens, its end; a \
+little camera drift between frames is never a fault.
 
 If you are given an opening moment, first list what it asks for, one item each: every person (with how \
 many when the words say), every object (with how many when the words say, such as "a second prism" or \
