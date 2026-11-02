@@ -99,8 +99,13 @@ class FalVideoService:
         return reply.content
 
     def upload(self, data: bytes, content_type: str) -> str:
-        """A short-lived fal URL for a start image that lives in local storage."""
-        return self._get_client().upload(data, content_type)
+        """A short-lived fal URL for a start image that lives in local storage; a failed upload is tried once
+        more, since fal's storage sometimes refuses one at random (2026-11-02: "Invalid storage type")."""
+        try:
+            return self._get_client().upload(data, content_type)
+        except (fal_client.FalClientError, httpx.HTTPError) as exc:
+            logger.warning("fal upload failed (%s); trying once more", str(exc)[:160])
+            return self._get_client().upload(data, content_type)
 
     def _get_client(self) -> fal_client.SyncClient:
         if self._client is None:

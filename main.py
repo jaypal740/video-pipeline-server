@@ -7,6 +7,7 @@ from src.core.container import Container
 from src.core.logging import configure_logging
 from src.core.database import create_tables
 from src.schema.asset.asset_schema import ReviewState
+from src.schema.enums import StageName
 from src.schema.lesson.lesson_schema import GradeBand, VideoType
 from src.schema.run.run_schema import Run
 from src.schema.song.song_schema import SongStatus
@@ -203,6 +204,33 @@ def run_video(
         typer.echo(f"  {shot_id}  {asset.review:12s} try {asset.params.get('try', 1)}  {asset.params.get('seconds', 0):.1f}s"
                    f"  {asset.params.get('score')}/10  {asset.path}"
                    + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
+
+
+@run_app.command("lipsync")
+def run_lipsync(
+    run_id: str,
+    force: bool = typer.Option(False, "--force", help="Draw again even if nothing changed."),
+) -> None:
+    """Stage 5b: the host singing each sung shot, lip-synced from its keyframe to the song."""
+    made = container.lipsync_service().run(run_id, force=force)
+    for shot_id, asset in made.items():
+        typer.echo(f"  {shot_id}  {asset.review:12s} try {asset.params.get('try', 1)}  {asset.params.get('seconds', 0):.1f}s"
+                   f"  {asset.params.get('score')}/10  {asset.path}"
+                   + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
+
+
+@run_app.command("assemble")
+def run_assemble(
+    run_id: str,
+    force: bool = typer.Option(False, "--force", help="Assemble again even if nothing changed."),
+) -> None:
+    """Stage 6: every shot's clip on the song's timeline, with cuts and dissolves and the song laid on."""
+    film = container.assembly_service().run(run_id, force=force)
+    state = container.run_repository().stage(run_id, StageName.ASSEMBLY)
+    for row in state.output["shots"]:
+        typer.echo(f"  {row['shot']}  {row['source']:8s} x{row['speed']:.2f}  {row['frames']} frames")
+    typer.echo(f"{state.status}: {state.output['seconds']:.1f}s  {film.path}"
+               + (f"  ({'; '.join(state.output['problems'])})" if state.output["problems"] else ""))
 
 
 @run_app.command("recheck-video")

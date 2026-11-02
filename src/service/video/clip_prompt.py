@@ -11,6 +11,10 @@ from src.service.sheet.sheet_prompt import NO_OVERLAY_TEXT, Style
 # send motion the wrong way, so moves are named by where the picture goes.
 PROMPT_WORDS = 60
 NEGATIVE = "text, captions, subtitles, watermark, extra people, extra characters, distortion, blur"
+# Added after the shot's own words. On the 2026-11-02 style test it removed H3's glow and flares and its
+# overacting faces; a mouth stays closed because only the lip-sync stage gives anyone words.
+STYLE_LINE = ("Faces stay calm with the mouth closed unless the action says otherwise. Flat, even cartoon colours "
+              "with crisp outlines and soft, even light.")
 
 _MOVE = {CameraMove.STATIC: "the camera holds its framing", CameraMove.PAN: "the camera pans {d}",
          CameraMove.TILT: "the camera tilts {d}", CameraMove.PUSH_IN: "the camera pushes in slowly",
@@ -54,6 +58,7 @@ def clip_prompt(style: Style, shot: Shot, place: Place, subjects: list[CastMembe
             parts.append(f"{camera_words(shot).capitalize()}, {_MOTION[shot.motion]}.")
         if shot.screen_direction in _SCREEN:
             parts.append(f"The subject is {_SCREEN[shot.screen_direction]}.")
+        parts.append(STYLE_LINE)
     return f"{style.name} animation. {clean(' '.join(parts))}"   # the style name keeps its own digits (2D)
 
 

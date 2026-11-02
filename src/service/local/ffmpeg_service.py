@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -29,6 +30,31 @@ class FfmpegService:
             raise RuntimeError(f"ffprobe read a zero-length file: {path}")
         return {"seconds": seconds, "fps": float(num) / float(den or 1), "width": stream.get("width"),
                 "height": stream.get("height")}
+
+    def packets(self, path: Path) -> dict[str, int]:
+        """Packets per stream type ({"video": 1440, "audio": 2813}), counted without decoding; a video
+        stream's packets are its frames."""
+        result = subprocess.run(["ffprobe", "-v", "error", "-count_packets", "-show_entries",
+                                 "stream=codec_type,nb_read_packets", "-of", "json", str(path)],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"ffprobe failed: {result.stderr[-400:]}")
+        counts: dict[str, int] = {}
+        for stream in json.loads(result.stdout).get("streams", []):
+            kind = stream.get("codec_type", "")
+            counts[kind] = counts.get(kind, 0) + int(stream.get("nb_read_packets") or 0)
+        return counts
+
+    def black(self, path: Path, seconds: float, pixel: float, picture: float) -> list[tuple[float, float]]:
+        """(start, end) of every stretch of at least `seconds` where `picture` of the pixels are darker than
+        `pixel`, from ffmpeg's blackdetect (which reports on the info log, so -v error is not used here)."""
+        result = subprocess.run(["ffmpeg", "-v", "info", "-nostdin", "-i", str(path), "-an", "-vf",
+                                 f"blackdetect=d={seconds}:pix_th={pixel}:pic_th={picture}", "-f", "null", "-"],
+                                capture_output=True)
+        log = result.stderr.decode(errors="replace")
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg failed: {log[-400:]}")
+        return [(float(a), float(b)) for a, b in re.findall(r"black_start:([\d.]+) black_end:([\d.]+)", log)]
 
     def run(self, args: list[str]) -> bytes:
         result = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", *args], capture_output=True)

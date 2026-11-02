@@ -1,7 +1,9 @@
 import hashlib
 import logging
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 from pydantic import BaseModel
 
@@ -14,14 +16,16 @@ from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.image.image_check_schema import Brief, Correction
 from src.schema.run.stage_state_schema import StageState
-from src.schema.storyboard.storyboard_schema import Shot, ShotKind, Storyboard
+from src.schema.storyboard.storyboard_schema import Moves, Shot, ShotKind, Storyboard
 from src.service.image.image_check_service import ImageCheckService
 from src.service.keyframe.keyframe_prompt import CORRECTION, check_correction, correction_request
 from src.service.lesson.lesson_rules import band_rules
 from src.service.llm.llm_service import LabelledImage, LlmCall, LlmError, LlmService
+from src.service.local.ffmpeg_service import FfmpegService
 from src.service.sheet.sheet_prompt import Style
 from src.service.sheet.sheet_service import URL_SECONDS, USABLE
 from src.service.storage.storage_service import Storage
+from src.service.video.camera_move import move_filter
 from src.service.video.clip_checks import ClipCheckService, ClipChecks
 from src.service.video.clip_prompt import NEGATIVE, clip_brief, clip_prompt, host_look_for
 from src.service.video.fal_video_service import FalVideoService, VideoReply
@@ -53,43 +57,53 @@ class Attempt(BaseModel):
 
 
 class VideoService:
-    """Stage 5a: one clip per shot, animated from its keyframe by the video model, checked by code (does it
-    move, does it run to the end) and then by the judge on three frames. Same rules as the keyframes: no
-    person decides, the score decides, a retry carries a correction, a seed is never drawn twice."""
+    """Stage 5a: one clip per shot. A shot where something moves is animated by the video model between its
+    start and end keyframes, at the slot's own length, then checked by code (does it move, does it freeze)
+    and by the judge on three frames; its audio is dropped, since the song is the only sound. A shot where
+    only the camera moves is an ffmpeg move over its keyframe. A sung shot is left to the lip-sync stage.
+    Same rules as the keyframes: no person decides, the score decides, a retry carries a correction, a seed
+    is never drawn twice."""
 
     def __init__(self, run_repository: RunRepository, asset_repository: AssetRepository, storage: Storage,
                  video: FalVideoService, checks: ClipCheckService, check: ImageCheckService, llm: LlmService,
-                 settings: Settings) -> None:
+                 ffmpeg: FfmpegService, settings: Settings) -> None:
         self._runs = run_repository
         self._assets = asset_repository
         self._storage = storage
         self._video = video
         self._checks = checks
+        self._ffmpeg = ffmpeg
         self._check = check
         self._llm = llm
         self._settings = settings
 
     def run(self, run_id: str, force: bool = False) -> dict[str, Asset]:
         board = self._board(run_id)
-        keyframes = self._keyframes(run_id)
+        keyframes, ends = self._keyframes(run_id), self._end_keyframes(run_id)
         style, model = Style.of(band_rules(board.grade_band)), self._settings.video_model
         spec = video_model(model)
         cast = {c.id: c for c in board.cast}
         places = {p.id: p for p in board.places}
         shots = [s for s in board.shots if s.repeat_of is None]
-        plans, blocked = [], []
+        plans, moves, blocked = [], [], []
         for shot in shots:
             keyframe = keyframes.get(shot.id)
             if keyframe is None or keyframe.review not in USABLE:
                 blocked.append(shot.id)
                 continue
             if shot.kind == ShotKind.SUNG and self._settings.video_sung_mode == "skip":
-                continue                                        # assembly shows the keyframe until lip-sync
+                continue                                        # the lip-sync stage makes this one
+            if shot.kind != ShotKind.SUNG and shot.moves == Moves.CAMERA:
+                moves.append((shot, keyframe))
+                continue
             subjects = [cast[s] for s in shot.subjects]
             prompt = clip_prompt(style, shot, places[shot.place], subjects, host_look_for(subjects))
             seconds = spec.seconds((shot.end - shot.start) * self._settings.video_length_factor)
-            plans.append((shot, prompt, keyframe, seconds, clip_brief(shot, places[shot.place], subjects)))
-        key = hashlib.sha256("|".join([model, *(f"{s.id}:{p}:{k.sha256}:{n}" for s, p, k, n, _ in plans)])
+            end = ends.get(shot.id)
+            plans.append((shot, prompt, keyframe, seconds, clip_brief(shot, places[shot.place], subjects), end))
+        key = hashlib.sha256("|".join([model, *(f"{s.id}:{p}:{k.sha256}:{e.sha256 if e else ''}:{n}"
+                                                for s, p, k, n, _, e in plans),
+                                       *(f"{s.id}:camera:{k.sha256}:{self._move_key(s)}" for s, k in moves)])
                              .encode()).hexdigest()
 
         state = self._runs.stage(run_id, StageName.VIDEO)
@@ -100,12 +114,14 @@ class VideoService:
         state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
         state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
         state = self._runs.stage_states.update(state)
-        logger.info("video %s: %s, %d clips to draw, %d blocked by keyframes, %d repeats reused", run_id[:8], model,
-                    len(plans), len(blocked), len(board.shots) - len(shots))
+        logger.info("video %s: %s, %d clips to draw (%d with an end frame), %d camera moves, %d blocked by "
+                    "keyframes, %d repeats reused", run_id[:8], model, len(plans), sum(1 for p in plans if p[-1]),
+                    len(moves), len(blocked), len(board.shots) - len(shots))
         self._errors: dict[str, str] = {}
         self._lock, self._finished, self._failed, self._stopped = threading.Lock(), 0, 0, None
         try:
-            made = self._draw_all(run_id, model, plans)
+            made = {s.id: self._camera(run_id, s, k) for s, k in moves}
+            made.update(self._draw_all(run_id, model, plans))
         except Exception as exc:
             state.status, state.error, state.finished_at = StageStatus.FAILED, str(exc), utcnow()
             self._runs.stage_states.update(state)
@@ -167,7 +183,8 @@ class VideoService:
                 score, asked_for = checklist.score, [a.model_dump() for a in checklist.asked_for]
                 problems, notes = self._check.problems(checklist, brief), self._check.notes(checklist)
             asset.params = {**asset.params, "score": score, "asked_for": asked_for, "checks": checks.problems,
-                            "motion": checks.motion, "tail_motion": checks.tail_motion}
+                            "motion": checks.motion, "tail_motion": checks.tail_motion,
+                            "active_seconds": checks.active_seconds}
             asset.review = ReviewState.PASSED if not problems else ReviewState.FAILED
             asset.review_notes = "\n".join(notes) or None
             self._assets.assets.update(asset)
@@ -223,8 +240,8 @@ class VideoService:
     def _draw_all(self, run_id: str, model: str, plans: list) -> dict[str, Asset]:
         made: dict[str, Asset] = {}
         todo = []
-        for shot, prompt, keyframe, seconds, brief in plans:
-            seeds = self._tries(model, prompt, keyframe, seconds)
+        for shot, prompt, keyframe, seconds, brief, end in plans:
+            seeds = self._tries(model, prompt, keyframe, seconds, end)
             cached = {key: c for *_, key in seeds if (c := self._assets.find_cached(key)) is not None}
             tried = list(cached.values())
             usable = next((c for c in tried if c.review in USABLE), None)
@@ -237,17 +254,19 @@ class VideoService:
             else:
                 last = max(tried, key=lambda c: c.params.get("try", 1), default=None)
                 findings = (last.review_notes or "").splitlines() if last is not None else []
-                todo.append((shot, prompt, keyframe, seconds, brief, left, findings))
+                todo.append((shot, prompt, keyframe, seconds, brief, left, findings, end))
         if not todo:
             return made
         self._guard_spend(run_id, model, [n for _, _, _, n, *_ in todo])
         urls = {k.id: self._url(k) for _, _, k, *_ in todo}
+        urls.update({e.id: self._url(e) for *_, e in todo if e is not None})
         frames = {k.id: self._storage.get(k.path) for _, _, k, *_ in todo}
         with ThreadPoolExecutor(max_workers=self._settings.video_workers) as pool:
-            futures = {pool.submit(self._attempts, model, urls[k.id], frames[k.id], *job): job
-                       for job in todo for k in [job[2]]}
+            futures = {pool.submit(self._attempts, model, urls[k.id], frames[k.id], *job[:-1],
+                                   urls[e.id] if e is not None else None): job
+                       for job in todo for k, e in [(job[2], job[-1])]}
             for future in as_completed(futures):
-                shot, _, keyframe, *_ = futures[future]
+                shot, _, keyframe, *_, end = futures[future]
                 try:
                     tries = future.result()
                 except Exception as exc:
@@ -257,7 +276,7 @@ class VideoService:
                 if not tries:
                     self._errors[shot.id] = self._stopped
                     continue
-                kept = self._store_attempts(run_id, shot, keyframe, tries)
+                kept = self._store_attempts(run_id, shot, keyframe, tries, end)
                 if kept is not None:
                     made[shot.id] = kept
         if self._stopped:
@@ -279,15 +298,18 @@ class VideoService:
                              "or reduce the run")
 
     def _attempts(self, model: str, url: str, keyframe_png: bytes, shot: Shot, prompt: str, keyframe: Asset,
-                  seconds: int, brief: Brief, seeds: list[tuple[int, int, str]], findings: list[str]) -> list[Attempt]:
-        """Network only: draw, check by code, judge on three frames, retry on a new seed with a correction."""
+                  seconds: float, brief: Brief, seeds: list[tuple[int, int, str]], findings: list[str],
+                  end_url: str | None) -> list[Attempt]:
+        """Network only: draw between the start and end frames, drop the audio, check by code, judge on three
+        frames, retry on a new seed with a correction."""
         if self._stopped:
             return []
         tries = []
         for attempt, seed, cache_key in seeds:
             correction, fix = self._correction(shot, prompt, brief, findings) if findings else (None, None)
             drawn = f"{prompt} {correction}" if correction else prompt
-            reply = self._video.generate(model, drawn, url, seconds, seed=seed, negative=NEGATIVE)
+            reply = self._video.generate(model, drawn, url, seconds, seed=seed, negative=NEGATIVE, end_image_url=end_url)
+            reply.data = self._silent(reply.data)               # the models make up speech; the song is the sound
             checks = self._checks.check(reply.data, reply.seconds_requested)
             score, asked_for, notes, call = None, [], list(checks.problems), None
             if not checks.problems:
@@ -334,7 +356,8 @@ class VideoService:
                 self._stopped = (f"stopped: {self._failed} of the first {self._finished} clips failed every draw; "
                                  "fix the cause before drawing more")
 
-    def _store_attempts(self, run_id: str, shot: Shot, keyframe: Asset, tries: list[Attempt]) -> Asset | None:
+    def _store_attempts(self, run_id: str, shot: Shot, keyframe: Asset, tries: list[Attempt],
+                        end: Asset | None) -> Asset | None:
         stored = []
         for t in tries:
             asset_id = new_id()
@@ -344,10 +367,13 @@ class VideoService:
                 id=asset_id, run_id=run_id, stage=StageName.VIDEO, kind=AssetKind.VIDEO, path=path,
                 sha256=hashlib.sha256(t.reply.data).hexdigest(), target_id=shot.id, cache_key=t.cache_key,
                 provider=self._video.name, model=t.reply.model, seed=t.reply.seed, prompt=t.prompt,
-                params={"try": t.attempt, "keyframe": keyframe.id, "seconds_requested": t.reply.seconds_requested,
+                params={"try": t.attempt, "route": "model", "keyframe": keyframe.id,
+                        "end_keyframe": end.id if end is not None else None,
+                        "seconds_requested": t.reply.seconds_requested,
                         "seconds": t.checks.seconds, "fps": t.checks.fps, "width": t.checks.width,
                         "height": t.checks.height, "request_id": t.reply.request_id, "wall": t.reply.seconds,
                         "motion": t.checks.motion, "tail_motion": t.checks.tail_motion, "checks": t.checks.problems,
+                        "active_seconds": t.checks.active_seconds,
                         "score": t.score, "asked_for": t.asked_for, "correction": t.correction},
                 cost_usd=t.reply.cost_usd, review=ReviewState.PASSED if not t.problems else ReviewState.FAILED,
                 review_notes="\n".join(t.notes) or None))
@@ -364,12 +390,60 @@ class VideoService:
     def _url(self, asset: Asset) -> str:
         return self._storage.url(asset.path, URL_SECONDS) or self._video.upload(self._storage.get(asset.path), "image/png")
 
-    def _tries(self, model: str, prompt: str, keyframe: Asset, seconds: int) -> list[tuple[int, int, str]]:
+    def _tries(self, model: str, prompt: str, keyframe: Asset, seconds: float,
+               end: Asset | None) -> list[tuple[int, int, str]]:
         """A shot's tries in order: try number, seed and cache key. The key uses the shot's own prompt, not a
         retry's correction, so a corrected retry is still found and never drawn twice."""
-        base = int(hashlib.sha256(f"{prompt}|{keyframe.sha256}".encode()).hexdigest()[:8], 16) % 2**31
-        return [(i + 1, base + i, hashlib.sha256(f"{model}|{prompt}|{keyframe.sha256}|{base + i}|{seconds}".encode())
+        frames = f"{keyframe.sha256}|{end.sha256}" if end is not None else keyframe.sha256
+        base = int(hashlib.sha256(f"{prompt}|{frames}".encode()).hexdigest()[:8], 16) % 2**31
+        return [(i + 1, base + i, hashlib.sha256(f"{model}|{prompt}|{frames}|{base + i}|{seconds}".encode())
                  .hexdigest()) for i in range(self._settings.image_max_tries)]
+
+    # --- camera moves and audio ---------------------------------------------------------------------------
+
+    def _move_key(self, shot: Shot) -> str:
+        s = self._settings
+        return (f"{shot.camera.move}:{shot.camera.direction}:{shot.camera.speed}:{self._move_frames(shot)}:"
+                f"{s.assembly_width}x{s.assembly_height}@{s.assembly_fps}")
+
+    def _move_frames(self, shot: Shot) -> int:
+        return max(1, round((shot.end - shot.start) * self._settings.assembly_fps))
+
+    def _camera(self, run_id: str, shot: Shot, keyframe: Asset) -> Asset:
+        """The clip of a shot where only the camera moves: ffmpeg over the keyframe. Nothing to judge, since
+        the picture is the approved keyframe; the same move on the same keyframe is made once."""
+        cache_key = hashlib.sha256(f"camera|{keyframe.sha256}|{self._move_key(shot)}".encode()).hexdigest()
+        cached = self._assets.find_cached(cache_key)
+        if cached is not None:
+            logger.info("clip %s: reused camera move %s", shot.id, cached.id[:8])
+            return cached
+        s, frames = self._settings, self._move_frames(shot)
+        with tempfile.TemporaryDirectory() as tmp:
+            still, clip = Path(tmp) / "keyframe.png", Path(tmp) / "clip.mp4"
+            still.write_bytes(self._storage.get(keyframe.path))
+            self._ffmpeg.run(["-loop", "1", "-i", str(still), "-vf",
+                              move_filter(shot, frames, s.assembly_width, s.assembly_height, s.assembly_fps),
+                              "-frames:v", str(frames), "-c:v", "libx264", "-crf", "18", str(clip)])
+            data = clip.read_bytes()
+        asset_id = new_id()
+        path = f"runs/{run_id}/clips/{shot.id}/camera-{asset_id[:8]}.mp4"
+        self._storage.put(path, data, "video/mp4")
+        logger.info("clip %s: camera %s made by ffmpeg, %d frames", shot.id, shot.camera.move, frames)
+        return self._assets.assets.add(Asset(
+            id=asset_id, run_id=run_id, stage=StageName.VIDEO, kind=AssetKind.VIDEO, path=path,
+            sha256=hashlib.sha256(data).hexdigest(), target_id=shot.id, cache_key=cache_key, provider="ffmpeg",
+            model="ffmpeg", prompt=None,
+            params={"try": 1, "route": "camera", "keyframe": keyframe.id, "move": shot.camera.move,
+                    "seconds": frames / s.assembly_fps, "frames": frames},
+            cost_usd=0.0, review=ReviewState.PASSED))
+
+    def _silent(self, data: bytes) -> bytes:
+        """The clip with its audio track removed; the picture is copied untouched."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out = Path(tmp) / "in.mp4", Path(tmp) / "out.mp4"
+            src.write_bytes(data)
+            self._ffmpeg.run(["-i", str(src), "-an", "-c:v", "copy", str(out)])
+            return out.read_bytes()
 
     def _cost(self, run_id: str, provider: str, model: str, cost: float, target_id: str, units: float, unit: str) -> None:
         self._assets.cost_entries.add(CostEntry(run_id=run_id, stage=StageName.VIDEO, provider=provider, model=model,
@@ -387,3 +461,9 @@ class VideoService:
             raise ValueError(f"Run {run_id} has no finished keyframes (keyframes stage: "
                              f"{state.status if state else 'not run'}); run the keyframes stage first")
         return {s: a for s, i in state.output["keyframes"].items() if (a := self._assets.assets.get(i)) is not None}
+
+    def _end_keyframes(self, run_id: str) -> dict[str, Asset]:
+        """Each shot's planned last frame, from the keyframes stage; a shot without one is drawn from its start."""
+        state = self._runs.stage(run_id, StageName.KEYFRAMES)
+        return {s: a for s, i in (state.output or {}).get("end_keyframes", {}).items()
+                if (a := self._assets.assets.get(i)) is not None}

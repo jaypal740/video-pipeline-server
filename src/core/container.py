@@ -7,6 +7,7 @@ from src.repository.asset.asset_repository import AssetRepository
 from src.repository.auth.auth_repository import AuthRepository
 from src.repository.run.run_repository import RunRepository
 from src.repository.song.song_repository import SongRepository
+from src.service.assembly.assembly_service import AssemblyService
 from src.service.auth.auth_service import AuthService
 from src.service.image.fal_image_service import FalImageService
 from src.service.image.image_check_service import ImageCheckService
@@ -17,6 +18,8 @@ from src.service.keyframe.keyframe_service import KeyframeService
 from src.service.intake.intake_service import IntakeService
 from src.service.intake.preview_service import PreviewService
 from src.service.lesson.lesson_service import LessonService
+from src.service.lipsync.fal_lipsync_service import FalLipsyncService
+from src.service.lipsync.lipsync_service import LipsyncService
 from src.service.llm.anthropic_service import AnthropicService
 from src.service.llm.llm_service import LlmService
 from src.service.llm.openai_service import OpenAiService
@@ -70,6 +73,7 @@ class Container(containers.DeclarativeContainer):
                                             fallback_model=settings.provided.image_fallback_model)
     fal_video_service = providers.Singleton(FalVideoService, api_key=settings.provided.fal_key,
                                             fallback_model=settings.provided.video_fallback_model)
+    fal_lipsync_service = providers.Singleton(FalLipsyncService, api_key=settings.provided.fal_key)
     clip_check_service = providers.Singleton(ClipCheckService, ffmpeg=ffmpeg_service)
     image_check_service = providers.Singleton(ImageCheckService, llm=llm_service, settings=settings)
 
@@ -129,5 +133,27 @@ class Container(containers.DeclarativeContainer):
         checks=clip_check_service,
         check=image_check_service,
         llm=llm_service,
+        ffmpeg=ffmpeg_service,
+        settings=settings,
+    )
+    lipsync_service = providers.Singleton(
+        LipsyncService,
+        run_repository=run_repository,
+        song_repository=song_repository,
+        asset_repository=asset_repository,
+        storage=storage,
+        lipsync=fal_lipsync_service,
+        ffmpeg=ffmpeg_service,
+        checks=clip_check_service,
+        check=image_check_service,
+        settings=settings,
+    )
+    assembly_service = providers.Singleton(
+        AssemblyService,
+        run_repository=run_repository,
+        asset_repository=asset_repository,
+        song_repository=song_repository,
+        storage=storage,
+        ffmpeg=ffmpeg_service,
         settings=settings,
     )

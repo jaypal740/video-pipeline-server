@@ -1,7 +1,7 @@
 from src.schema.storyboard.storyboard_schema import Storyboard
 from src.service.lesson.lesson_rules import band_rules
 from src.service.sheet.sheet_prompt import Style
-from src.service.video.clip_prompt import PROMPT_WORDS, camera_words, clip_brief, clip_prompt, host_look_for
+from src.service.video.clip_prompt import PROMPT_WORDS, STYLE_LINE, camera_words, clip_brief, clip_prompt, host_look_for
 from tests.test_keyframe_service import SHOTS, shot
 from tests.test_sheet_service import BOARD
 
@@ -23,7 +23,9 @@ def test_a_clip_prompt_is_short_positive_and_names_the_camera_in_spatial_words()
     for s in b.shots:
         text = clip_prompt(STYLE, s, place, [cast[x] for x in s.subjects], host_look_for([cast[x] for x in s.subjects]))
         body = text.removeprefix(f"{STYLE.name} animation. ")
-        assert len(text.split()) <= PROMPT_WORDS and '"' not in text and not any(c.isdigit() for c in body)
+        words = text.removesuffix(f" {STYLE_LINE}").split()         # the style line is fixed, not the shot's words
+        assert len(words) <= PROMPT_WORDS and '"' not in text and not any(c.isdigit() for c in body)
+        assert text.endswith(STYLE_LINE) == (s.kind != "sung")
     text = clip_prompt(STYLE, b.shots[-1], place, [cast["ship"]], None)
     assert text.startswith("A bold 2D cartoon animation. The ship turns and sails toward the horizon. By the last frame, the ship")
     assert "The camera pans to the right, slowly, steady, clear movement." in text

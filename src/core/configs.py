@@ -26,13 +26,21 @@ class Settings(BaseSettings):
                                                    validation_alias="PIPELINE_IMAGE_SECOND_OPINION_MODEL")
     # When the image model returns nothing (a filter, an outage), the same draw is tried once on this model.
     image_fallback_model: str | None = Field(default="gpt-image-2", validation_alias="PIPELINE_IMAGE_FALLBACK_MODEL")
-    # Video clips: one per shot from its keyframe. The model is set after the bake-off; a clip is asked for at
-    # length_factor x the shot and trimmed at assembly; sung shots get a calm clip (lip-sync comes later) or none.
-    video_model: str = Field(default="kling-o3-standard", validation_alias="PIPELINE_VIDEO_MODEL")
-    video_fallback_model: str | None = Field(default="wan-3", validation_alias="PIPELINE_VIDEO_FALLBACK_MODEL")
-    video_workers: int = Field(default=2, validation_alias="PIPELINE_VIDEO_WORKERS")
-    video_length_factor: float = Field(default=1.4, validation_alias="PIPELINE_VIDEO_LENGTH_FACTOR")
-    video_sung_mode: str = Field(default="calm", validation_alias="PIPELINE_VIDEO_SUNG_MODE")
+    # Video clips: one per shot, animated between its start and end keyframes, asked for at the slot's own
+    # length (length_factor 1.0) and fitted to the slot at assembly. Sung shots are skipped here: the
+    # lip-sync stage makes them from the keyframe and the song. Chosen on the 2026-11-02 bake-offs.
+    video_model: str = Field(default="minimax-h3-max-turbo", validation_alias="PIPELINE_VIDEO_MODEL")
+    video_fallback_model: str | None = Field(default="kling-o3-standard", validation_alias="PIPELINE_VIDEO_FALLBACK_MODEL")
+    video_workers: int = Field(default=4, validation_alias="PIPELINE_VIDEO_WORKERS")
+    video_length_factor: float = Field(default=1.0, validation_alias="PIPELINE_VIDEO_LENGTH_FACTOR")
+    video_sung_mode: str = Field(default="skip", validation_alias="PIPELINE_VIDEO_SUNG_MODE")
+    # Lip-sync: the host's sung shots, drawn from the keyframe and the song from the shot's start.
+    lipsync_model: str = Field(default="minimax-h3-max-lipsync", validation_alias="PIPELINE_LIPSYNC_MODEL")
+    # Assembly: every clip at this size and frame rate; a dissolve overlaps two shots by this many seconds.
+    assembly_width: int = Field(default=1280, validation_alias="PIPELINE_ASSEMBLY_WIDTH")
+    assembly_height: int = Field(default=720, validation_alias="PIPELINE_ASSEMBLY_HEIGHT")
+    assembly_fps: int = Field(default=24, validation_alias="PIPELINE_ASSEMBLY_FPS")
+    assembly_dissolve_s: float = Field(default=0.4, validation_alias="PIPELINE_ASSEMBLY_DISSOLVE_S")
     image_workers: int = Field(default=4, validation_alias="PIPELINE_IMAGE_WORKERS")
     # The judge's 0-10 score an image needs to pass; below it the image is drawn again. The judge gives a 6
     # to "the right picture with one small difference", which is good enough for a viewer.
