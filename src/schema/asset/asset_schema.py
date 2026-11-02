@@ -7,14 +7,17 @@ from src.schema.enums import AssetKind, StageName
 
 
 class ReviewState(StrEnum):
-    """Whether an image may be used. Only passed or approved images are ever attached as references or
-    shown; a needs_review image waits for a person and blocks what depends on it."""
+    """Whether an image may be used. Only passed or approved images are ever attached as references; a
+    keyframe may also be used_best: no try passed, so the best-scoring one above the floor is used and
+    the stage says so. needs_review waits for a person during the build of a stage and blocks what
+    depends on it; the server itself never waits."""
 
     PENDING = "pending"
     PASSED = "passed"
     FAILED = "failed"
     NEEDS_REVIEW = "needs_review"
     APPROVED = "approved"
+    USED_BEST = "used_best"
 
 
 class Asset(Entity):

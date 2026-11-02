@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     # The judge's 0-10 score an image needs to pass; below it the image is drawn again. The judge gives a 6
     # to "the right picture with one small difference", which is good enough for a viewer.
     image_pass_score: int = Field(default=6, validation_alias="PIPELINE_IMAGE_PASS_SCORE")
+    # A keyframe whose tries all failed uses its best-scoring try at or above this; below it, the shot fails.
+    image_floor_score: int = Field(default=5, validation_alias="PIPELINE_IMAGE_FLOOR_SCORE")
     # Draws per image before it waits for a person (the first draw plus retries), and the stop-loss: a stage
     # pauses when more than this share of its first STOP_LOSS_AFTER finished images failed every draw.
     image_max_tries: int = Field(default=2, validation_alias="PIPELINE_IMAGE_MAX_TRIES")

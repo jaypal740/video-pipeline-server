@@ -66,6 +66,7 @@ class FakeVision:
 
     def __init__(self, fail_first=0):
         self.fail_first = fail_first
+        self.fail_score = 4
         self.fail_when = None
         self.failed_when = 0
         self.extra_answer = False
@@ -104,7 +105,8 @@ class FakeVision:
         hit = self.fail_when is not None and self.fail_when[0] in user and self.failed_when < self.fail_when[1]
         if hit:
             self.failed_when += 1
-        score, reason = (4, "the waistcoat is blue") if (self.checks <= self.fail_first or hit) else (9, "a close match")
+        score, reason = ((self.fail_score, "the waistcoat is blue") if (self.checks <= self.fail_first or hit)
+                         else (9, "a close match"))
         return ProviderReply(output=Checklist(asked_for=asked_for, score=score, score_reason=reason, answers=answers), model=model,
                              input_tokens=6000, output_tokens=200, cost_usd=0.001)
 
@@ -179,21 +181,32 @@ def test_sheets_are_drawn_in_the_host_style_checked_and_costed(stage, container)
     assert container.storage().exists(sheets["sea"]["plate"].path)
 
 
-def test_a_failed_sheet_is_redrawn_then_left_for_review_and_never_passed(stage, container):
+def test_a_sheet_that_fails_every_draw_below_the_floor_fails_the_stage(stage, container):
     service, fal, vision = stage
     approve_a_host(service, fal)
-    vision.fail_when = ("Victorian", 2)                        # the operator's front view fails both draws
+    vision.fail_when = ("Victorian", 2)                        # the operator's front view fails both draws at 4/10
     run = board_run(container)
     sheets = service.run(run.id)
     operator = sheets["operator"]["front"]
-    assert operator.review == ReviewState.NEEDS_REVIEW and "waistcoat is blue" in operator.review_notes
-    assert operator.params["try"] == 2 and "/2-" in operator.path
+    assert operator.review == ReviewState.FAILED and "waistcoat is blue" in operator.review_notes
     tries = [a for a in container.asset_repository().assets.list(run_id=run.id, target_id="operator")
              if a.params["view"] == "front"]
-    assert sorted(a.params["try"] for a in tries) == [1, 2]
-    assert [a.review for a in sorted(tries, key=lambda a: a.params["try"])][0] == ReviewState.FAILED
+    assert sorted(a.params["try"] for a in tries) == [1, 2] and all(a.review == ReviewState.FAILED for a in tries)
     state = container.run_repository().stage(run.id, StageName.VISUAL_IDENTITY)
-    assert state.status == StageStatus.WAITING_GATE and state.output["needs_review"] == [operator.id]
+    assert state.status == StageStatus.FAILED and "operator/front: failed every draw; best 4/10" in state.error
+
+
+def test_a_sheet_that_fails_every_draw_uses_its_best_try_above_the_floor(stage, container):
+    service, fal, vision = stage
+    approve_a_host(service, fal)
+    vision.fail_when, vision.fail_score = ("Victorian", 2), 5   # fails the bar of 6, meets the floor of 5
+    run = board_run(container)
+    sheets = service.run(run.id)
+    operator = sheets["operator"]["front"]
+    assert operator.review == ReviewState.USED_BEST and operator.params["score"] == 5
+    state = container.run_repository().stage(run.id, StageName.VISUAL_IDENTITY)
+    assert state.status == StageStatus.DONE and state.output["used_best"] == [operator.id] and state.error is None
+    vision.fail_score = 4
 
 
 def test_the_same_sheet_is_reused_not_redrawn(stage, container):

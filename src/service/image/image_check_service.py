@@ -21,12 +21,18 @@ in the frame, age, size, shade or angle fail it only when the point of the momen
 different lengths, light from one side). Someone or something the moment names belongs in the picture even \
 when no reference image shows it. With no opening moment, leave that list empty.
 
+The opening moment and the description are the world the picture is set in, even when it differs from \
+everyday experience: a black sky in full sunlight, a white Sun, a beach with no one on it. Judge whether the \
+picture shows that world, never whether it looks normal on Earth; a picture that matches an unusual moment \
+is not marked down for being unusual. Judge "sunlit" by bright ground and hard-edged shadows, not by the \
+colour of the sky.
+
 Then give a score from 0 to 10 for how well the picture meets the description you are given, judging the \
 whole picture: the kind of thing shown, its overall shape, its main colours and materials, the setting and \
-the moment. No generated picture is perfect, so score what a viewer would see: 10 is a flawless match; 7 is \
-a good match with small differences a viewer would not notice (edge sharpness, a slightly different shade, \
-how a sleeve sits, something touching the frame edge); 5 is recognisably the right thing with one clear \
-mistake; 3 or less is the wrong thing. Say in one sentence what matches and what does not.
+the moment. No generated picture is perfect, so score what a viewer of that world would see: 10 is a \
+flawless match; 7 is a good match with small differences a viewer would not notice (edge sharpness, a \
+slightly different shade, how a sleeve sits, something touching the frame edge); 5 is recognisably the right \
+thing with one clear mistake; 3 or less is the wrong thing. Say in one sentence what matches and what does not.
 
 Then answer each rule true or false, with a one-sentence reason for every false that says what you actually \
 see. Judge only what is visible; do not guess at intent. The description and the opening moment are what \

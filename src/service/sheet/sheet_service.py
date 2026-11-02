@@ -32,7 +32,7 @@ URL_SECONDS = 3600
 BASE_KIT = "everyday"
 KIT_VIEWS = ["front", "three_quarter", "to_camera"]
 EXPRESSION_VIEWS = [view for view in FACE_VIEWS if view != "to_camera"]
-USABLE = (ReviewState.PASSED, ReviewState.APPROVED)
+USABLE = (ReviewState.PASSED, ReviewState.APPROVED, ReviewState.USED_BEST)
 
 
 class SheetService:
@@ -234,17 +234,20 @@ class SheetService:
         sheets: dict[str, dict[str, Asset]] = {}
         for (target, view), asset in zip(jobs, results):
             sheets.setdefault(target.id, {})[view] = asset
-        waiting = [a for a in results if a.review == ReviewState.NEEDS_REVIEW]
+        failed = [a for a in results if a.review == ReviewState.FAILED]  # no person decides: the stage fails
         retries = sum(a.params.get("try", 1) - 1 for a in results)
-        state.status = StageStatus.WAITING_GATE if waiting else StageStatus.DONE
+        state.status = StageStatus.FAILED if failed else StageStatus.DONE
+        state.error = "; ".join(f"{a.target_id}/{a.params['view']}: failed every draw; best "
+                                f"{a.params.get('score')}/10: {a.review_notes}" for a in failed) or None
         state.output = {"sheets": {t: {v: a.id for v, a in views.items()} for t, views in sheets.items()},
-                        "needs_review": [a.id for a in waiting]}
+                        "used_best": [a.id for a in results if a.review == ReviewState.USED_BEST]}
         state.finished_at = utcnow()
         self._runs.stage_states.update(state)
         spent = self._assets.run_cost(run_id)
-        logger.info("sheets %s: %s, %d images, %d retries, %d need review, $%.2f on the run so far, %.0fs",
-                    run_id[:8], state.status, len(results), retries, len(waiting), spent,
-                    (state.finished_at - state.started_at).total_seconds())
+        logger.log(logging.ERROR if failed else logging.INFO,
+                   "sheets %s: %s, %d images, %d retries, %d used best, %d failed, $%.2f on the run so far, %.0fs",
+                   run_id[:8], state.status, len(results), retries, len(state.output["used_best"]), len(failed),
+                   spent, (state.finished_at - state.started_at).total_seconds())
         return sheets
 
     def _sheet_job(self, run_id: str, style: Style, anchor: list[Asset], target: CastMember | Place, view: str) -> Asset:
@@ -260,9 +263,11 @@ class SheetService:
 
     def _draw(self, run_id: str | None, key: str, target_id: str, view: str, prompt: str, refs: list[Asset],
               aspect: str, brief: Brief, model: str) -> Asset:
-        """Draw, check, and try again on a new seed; after the last try the image is left for review. The seed
-        comes from the prompt and references, so the same look draws the same image in any run."""
+        """Draw, check, and try again on a new seed. When no try passes, the best-scoring one at or above the
+        floor is used (used_best); below the floor the image is failed. The seed comes from the prompt and
+        references, so the same look draws the same image in any run."""
         max_tries = self._settings.image_max_tries
+        tries = []
         base = int(hashlib.sha256("|".join([prompt, *(r.sha256 for r in refs)]).encode()).hexdigest()[:8], 16) % 2**31
         ref_urls = [self._url(r) for r in refs]
         for attempt in range(1, max_tries + 1):
@@ -288,13 +293,20 @@ class SheetService:
                 logger.info("sheet %s/%s: passed on try %d, $%.3f, %.1fs", target_id, view, attempt, reply.cost_usd,
                             reply.seconds)
                 return asset
-            asset.review = ReviewState.NEEDS_REVIEW if attempt == max_tries else ReviewState.FAILED
+            asset.review = ReviewState.FAILED
             asset.review_notes = "\n".join(problems)
             self._assets.assets.update(asset)
+            tries.append(asset)
             logger.warning("sheet %s/%s: try %d failed %d checks:\n%s", target_id, view, attempt, len(problems),
                            "\n".join(f"  - {p}" for p in problems))
-        logger.warning("sheet %s/%s: left for review after %d tries", target_id, view, max_tries)
-        return asset
+        best = max(tries, key=lambda a: a.params["score"])
+        if best.params["score"] >= self._settings.image_floor_score:
+            best.review = ReviewState.USED_BEST
+            self._assets.assets.update(best)
+            logger.warning("sheet %s/%s: no try passed; using the best, %d/10", target_id, view, best.params["score"])
+        else:
+            logger.error("sheet %s/%s: failed every draw; best %d/10", target_id, view, best.params["score"])
+        return best
 
     def _store(self, run_id: str | None, key: str, reply, prompt: str, refs: list[Asset], attempt: int,
                target_id: str, view: str, aspect: str, cache_key: str | None = None,

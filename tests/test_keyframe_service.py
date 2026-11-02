@@ -83,26 +83,37 @@ def test_keyframes_are_drawn_from_the_plate_and_the_right_sheet_views(stage, con
     assert cost == pytest.approx(4 * 0.044 + 4 * 0.001 + 3 * 0.044 + 3 * 0.001)
 
 
-def test_a_failing_keyframe_is_redrawn_then_left_for_review(stage, container):
+def test_a_shot_that_fails_every_draw_below_the_floor_fails_the_stage(stage, container):
     service, sheets, fal, vision = stage
     run = ready_run(container, sheets)
-    vision.fail_when = ("operator", 2)                           # only s03 has the operator in it
+    vision.fail_when = ("operator", 2)                           # only s03 has the operator in it; scores 4/10
     made = service.run(run.id)
-    waiting = [a for a in made.values() if a.review == ReviewState.NEEDS_REVIEW]
-    assert len(waiting) == 1 and waiting[0].target_id == "s03" and waiting[0].params["try"] == 2
-    assert "/2-" in waiting[0].path and made["s01"].review == ReviewState.PASSED
-    tries = container.asset_repository().assets.list(run_id=run.id, stage=StageName.KEYFRAMES,
-                                                     target_id=waiting[0].target_id)
-    assert sorted(a.params["try"] for a in tries) == [1, 2]
+    assert "s03" not in made and made["s01"].review == ReviewState.PASSED
+    tries = container.asset_repository().assets.list(run_id=run.id, stage=StageName.KEYFRAMES, target_id="s03")
+    assert sorted(a.params["try"] for a in tries) == [1, 2] and all(a.review == ReviewState.FAILED for a in tries)
     state = container.run_repository().stage(run.id, StageName.KEYFRAMES)
-    assert state.status == StageStatus.WAITING_GATE and state.output["needs_review"] == [waiting[0].id]
+    assert state.status == StageStatus.FAILED and state.output["blocked"] == ["s03"]
+    assert "s03: failed every draw; best 4/10" in state.error and "waistcoat" in state.error
     drawn, vision.fail_when = len(fal.calls), None               # a fixed judge passes the kept tries: no redraw
     rechecked = service.recheck(run.id)
     assert len(fal.calls) == drawn and rechecked["s03"].review == ReviewState.PASSED
     assert rechecked["s03"].params["score"] == 9 and rechecked["s03"].review_notes is None
     state = container.run_repository().stage(run.id, StageName.KEYFRAMES)
-    assert state.status == StageStatus.DONE and state.output["needs_review"] == []
+    assert state.status == StageStatus.DONE and state.error is None and state.output["blocked"] == []
     assert state.output["keyframes"]["s03"] == rechecked["s03"].id
+
+
+def test_a_shot_that_fails_every_draw_uses_its_best_try_above_the_floor(stage, container):
+    service, sheets, fal, vision = stage
+    run = ready_run(container, sheets)
+    vision.fail_when, vision.fail_score = ("operator", 2), 5     # fails the bar of 6, meets the floor of 5
+    made = service.run(run.id)
+    assert made["s03"].review == ReviewState.USED_BEST and made["s03"].params["score"] == 5
+    assert "waistcoat" in made["s03"].review_notes
+    state = container.run_repository().stage(run.id, StageName.KEYFRAMES)
+    assert state.status == StageStatus.DONE and state.output["used_best"] == [made["s03"].id]
+    assert state.output["blocked"] == [] and state.error is None
+    vision.fail_score = 4
 
 
 def test_a_thing_in_a_sung_shot_uses_its_front_view():
@@ -121,17 +132,17 @@ def test_a_seed_is_never_drawn_twice(stage, container):
     made = service.run(ready_run(container, sheets).id)        # same inputs: the passed second try is reused
     assert len(fal.calls) == drawn and made["s03"].review == ReviewState.PASSED and made["s03"].run_id == first.id
     third = ready_run(container, sheets, operator="A Victorian engineer in a tall hat")   # a new look: new seeds
-    vision.fail_when, vision.failed_when = ("reference image: operator", 2), 0    # s03 fails both seeds
+    vision.fail_when, vision.failed_when = ("reference image: operator", 2), 0    # s03 fails both seeds at 4/10
     service.run(third.id)
     drawn, vision.fail_when = len(fal.calls), None
     fourth = ready_run(container, sheets, operator="A Victorian engineer in a tall hat")
     made = service.run(fourth.id)
-    assert len(fal.calls) == drawn and made["s03"].review == ReviewState.NEEDS_REVIEW     # waits, no new spend
-    assert container.run_repository().waiting_review(fourth.id) == [made["s03"].id]      # found through the output
-    assert made["s03"].run_id == third.id
+    state = container.run_repository().stage(fourth.id, StageName.KEYFRAMES)
+    assert len(fal.calls) == drawn and "s03" not in made                                 # no new spend, same verdict
+    assert state.status == StageStatus.FAILED and "s03: failed every draw" in state.error
 
 
-def test_a_shot_whose_sheet_needs_review_is_blocked_until_a_person_approves_it(stage, container):
+def test_keyframes_need_finished_sheets_and_a_shot_without_a_usable_reference_fails(stage, container):
     service, sheets, fal, vision = stage
     n = len(container.run_repository().runs.list())
     song = container.song_repository().songs.add(Song(name=f"song-{n}", audio_path="a.mp3", lyrics="x"))
@@ -140,16 +151,21 @@ def test_a_shot_whose_sheet_needs_review_is_blocked_until_a_person_approves_it(s
                                                            status=StageStatus.DONE, output={**BOARD, "shots": SHOTS}))
     vision.fail_when = ("Victorian", 2)                        # the operator's front view fails both draws
     sheets.run(run.id)
+    with pytest.raises(ValueError, match="sheets stage: failed"):   # a failed sheets stage stops the job
+        service.run(run.id)
+    vision.fail_when = None
+    sheets.run(run.id, force=True)
     made = service.run(run.id)
     state = container.run_repository().stage(run.id, StageName.KEYFRAMES)
     assert state.status == StageStatus.DONE and state.output["blocked"] == [] and set(made) == {"s01", "s02", "s03", "s04"}
-    # the operator's three-quarter view passed, so s03 could be drawn; make the sea plate unusable and its shots block
-    plate = [a for a in container.asset_repository().assets.list(run_id=run.id, target_id="sea")][0]
+    sheet_state = container.run_repository().stage(run.id, StageName.VISUAL_IDENTITY)
+    plate = container.asset_repository().assets.get(sheet_state.output["sheets"]["sea"]["plate"])
     plate.review = ReviewState.NEEDS_REVIEW
     container.asset_repository().assets.update(plate)
     made = service.run(run.id, force=True)
     state = container.run_repository().stage(run.id, StageName.KEYFRAMES)
     assert state.output["blocked"] == ["s01", "s02", "s03"] and made == {}        # every shot is at sea
+    assert state.status == StageStatus.FAILED and "s01: no usable reference" in state.error
     plate.review = ReviewState.APPROVED
     container.asset_repository().assets.update(plate)
     made = service.run(run.id, force=True)
@@ -163,7 +179,7 @@ def test_keyframes_need_sheets_first_and_identical_inputs_are_reused(stage, cont
     bare = container.run_repository().runs.add(Run(song_id=song.id, name="r", audience=GradeBand.G3_5))
     container.run_repository().stage_states.add(StageState(run_id=bare.id, stage=StageName.STORYBOARD,
                                                            status=StageStatus.DONE, output={**BOARD, "shots": SHOTS}))
-    with pytest.raises(ValueError, match="no reference sheets"):
+    with pytest.raises(ValueError, match="no finished reference sheets"):
         service.run(bare.id)
     first = ready_run(container, sheets)
     originals = service.run(first.id)
@@ -208,8 +224,9 @@ def test_the_stop_loss_pauses_a_run_whose_first_shots_all_fail(stage, container)
     vision.fail_when = ("sails full", 100)                         # every keyframe fails both draws
     made = service.run(run.id)
     state = container.run_repository().stage(run.id, StageName.KEYFRAMES)
-    assert state.status == StageStatus.WAITING_GATE and len(made) == 8                 # stopped after 8 finished
-    assert len(state.output["blocked"]) == 12 and "stopped" in state.output["errors"]["s20"]
+    assert state.status == StageStatus.FAILED and len(made) == 0                       # 8 drawn at 4/10, 12 stopped
+    assert len(state.output["blocked"]) == 20 and "stopped" in state.output["errors"]["s20"]
+    assert "failed every draw" in state.output["errors"]["s01"]
     container.settings().image_workers = 4
 
 
@@ -220,7 +237,7 @@ def test_the_judge_writes_the_shots_checks_from_its_opening_moment(stage, contai
     made = service.run(run.id)
     user = next(u for u, labels in vision.seen if labels == ["the picture to check", "the place sea", "the cast member ship"])
     assert "Opening moment:\nThe ship sits on the grey sea" in user and "once each" not in user
-    assert made["s01"].review == ReviewState.NEEDS_REVIEW                                 # a failed item fails the shot
+    assert made["s01"].review == ReviewState.USED_BEST                                    # a failed item fails the try
     assert "the moment asks for no people beyond the ones listed: two people walk" in made["s01"].review_notes
     assert made["s01"].params["asked_for"][0]["ok"] is False                             # kept on the image
     vision.asked_for = []
