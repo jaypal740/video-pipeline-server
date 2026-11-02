@@ -192,11 +192,25 @@ def run_keyframes(
                    + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
 
 
+@run_app.command("recheck")
+def run_recheck(run_id: str) -> None:
+    """Judge the keyframes that did not pass again with the current brief; nothing is drawn."""
+    for shot_id, asset in container.keyframe_service().recheck(run_id).items():
+        typer.echo(f"  {shot_id}  {asset.review:12s} try {asset.params.get('try', 1)}  {asset.params.get('score')}/10"
+                   + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
+
+
 @run_app.command("review")
 def run_review(run_id: str) -> None:
-    """Images of this run waiting for a person, with the check's reasons."""
-    for asset in container.asset_repository().assets.list(run_id=run_id, review=ReviewState.NEEDS_REVIEW):
-        typer.echo(f"  {asset.id}  {asset.stage:16s} {asset.target_id:14s} {asset.path}")
+    """Images this run's stages are waiting on a person for, with the check's reasons. An image reused
+    from an earlier run shows that run next to it."""
+    assets = container.asset_repository().assets
+    for asset_id in container.run_repository().waiting_review(run_id):
+        asset = assets.get(asset_id)
+        if asset is None or asset.review != ReviewState.NEEDS_REVIEW:
+            continue
+        drawn_by = "" if asset.run_id in (run_id, None) else f"  (drawn in run {asset.run_id[:8]})"
+        typer.echo(f"  {asset.id}  {asset.stage:16s} {asset.target_id:14s} {asset.path}{drawn_by}")
         for line in (asset.review_notes or "").splitlines():
             typer.echo(f"      - {line}")
 

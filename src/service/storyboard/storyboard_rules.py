@@ -12,7 +12,7 @@ HOST = "host"
 SCALE_FIT = 2
 # Word limits keep the image and video prompts built from these fields short.
 LIMITS = {"start_state": 30, "action": 20, "end_state": 20, "cast look": 25, "place look": 30, "lighting": 12,
-          "size": 10, "motif rule": 15, "shape": 40}
+          "size": 10, "motif rule": 15, "shape": 40, "outfit": 20}
 # A thing off screen this many shots in a row gets its reference sheet attached again when it returns.
 REANCHOR_AFTER = 4
 
@@ -26,6 +26,11 @@ _TEXT = re.compile(r"\b(text|labels?|labell?ed|captions?|charts?|graphs?|diagram
 # faces), as are mouth and expression (river mouth, gene expression); "eye" next to a hyphen is "eye-level".
 # A drawn face on a thing is caught for real by the keyframe stage's image check.
 _FACE = re.compile(r"\b((?<!-)eyes?(?!-)|smil\w*|frown\w*|grin\w*|wink\w*|cartoon\w*|mascots?|cute)\b", re.I)
+# A person in a shot's words. One who comes back in a later shot must be a cast member, or the keyframe stage
+# has no reference to draw them from and they change from shot to shot; a passer-by, a crowd or a hand holding
+# something is scenery and needs no cast entry.
+_PERSON = re.compile(r"\b(girls?|boys?|men|man|women|woman|kids?|child(?:ren)?|teen(?:ager)?s?|students?|"
+                     r"someone|somebody|persons?)\b", re.I)
 _BRIDGES = {Transition.DISSOLVE, Transition.MATCH_CUT}
 _ZOOMS = {CameraMove.PUSH_IN, CameraMove.PULL_BACK}
 
@@ -55,12 +60,15 @@ def wardrobe_for(band: GradeBand) -> dict[str, str]:
     return tomllib.loads((TEMPLATES / "host" / f"{band}.toml").read_text())["wardrobe"]
 
 
-def host_in(band: GradeBand, kit: str) -> CastMember:
-    """The host dressed in one wardrobe kit, as drawn."""
-    host, wardrobe = host_for(band), wardrobe_for(band)
-    if kit not in wardrobe:
-        raise ValueError(f"grades {band} have no wardrobe kit {kit!r}; kits: {sorted(wardrobe)}")
-    return host.model_copy(update={"look": f"{host.look}, wearing {wardrobe[kit]}"})
+def outfit_text(band: GradeBand, outfit: str) -> str:
+    """An outfit as words: a wardrobe kit name expands to its description, anything else is used as is."""
+    return wardrobe_for(band).get(outfit, outfit).rstrip(".")
+
+
+def host_in(band: GradeBand, outfit: str) -> CastMember:
+    """The host dressed in one outfit (a kit name or free words), as drawn."""
+    host = host_for(band)
+    return host.model_copy(update={"look": f"{host.look}, wearing {outfit_text(band, outfit)}"})
 
 
 def _words(field: str, text: str, limit: int, faces_allowed: bool, digits_allowed: bool = False) -> list[str]:
@@ -91,8 +99,9 @@ def header_problems(draft: StoryboardDraft, band: BandRules, slots: list[Slot]) 
     """Problems with the cast, places, motifs, shape and outfit; any of these re-asks the whole board."""
     found = _words("shape", draft.shape, LIMITS["shape"], faces_allowed=True, digits_allowed=True)
     wardrobe = wardrobe_for(band.band)
-    if draft.host_outfit not in wardrobe:
-        found.append(f"host_outfit must be one of {sorted(wardrobe)}")
+    for p in draft.places:
+        if p.host_outfit and p.host_outfit not in wardrobe:
+            found += _words(f"place {p.id} host_outfit", p.host_outfit, LIMITS["outfit"], faces_allowed=True)
     ids = [c.id for c in draft.cast] + [p.id for p in draft.places]
     for bad in sorted({i for i in ids if not _ID.match(i) or ids.count(i) > 1}):
         found.append(f"id {bad!r} must be unique, lowercase letters, digits and underscores")
@@ -170,6 +179,7 @@ def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fm
     for slot_id in sorted({s for s in written if written.count(s) > 1}):
         add(slot_id, "this slot has more than one shot; give exactly one")
 
+    unlisted: dict[str, list[str]] = {}
     for slot in slots:
         shot = next((s for s in draft.shots if s.slot == slot.id), None)
         if slot.repeat_of is not None or shot is None:
@@ -192,6 +202,8 @@ def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fm
         people = sum(cast[s].kind == CastKind.PERSON for s in shot.subjects if s in cast)
         if people > band.max_people_in_frame:
             add(slot.id, f"{people} people in frame; at most {band.max_people_in_frame} for grades {band.band}")
+        if HOST in shot.subjects and shot.place in places and not places[shot.place].host_outfit:
+            add(slot.id, f"the host appears in {shot.place!r}, so that place needs a host_outfit")
         if HOST in shot.subjects and slot.kind != ShotKind.SUNG and fmt.type != VideoType.PERSONALISED_HERO:
             add(slot.id, f"the host appears only in sung shots in a {fmt.type} video")
         move, direction = shot.camera.move, shot.camera.direction
@@ -200,6 +212,15 @@ def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fm
         for field in ("start_state", "action", "end_state"):
             for p in _words(field, getattr(shot, field), LIMITS[field], faces_allowed=people > 0):
                 add(slot.id, p)
+        if people == 0:
+            for m in _PERSON.finditer(f"{shot.start_state} {shot.action} {shot.end_state}"):
+                unlisted.setdefault(m.group(0).lower().rstrip("s"), []).append(slot.id)
+    for word, where in unlisted.items():                        # the same person word in two or more shots
+        if len(seen := sorted(set(where))) > 1:
+            for slot_id in seen:
+                add(slot_id, f"a {word!r} appears in {', '.join(seen)} but is not a cast member; declare them in cast "
+                             f"with kind person and list them in those shots if they are the same person, or make one "
+                             "of them a crowd or a passer-by")
 
     # Shot-to-shot rules. A repeat copies a shot already checked in its own context, so it is never
     # blamed; the shot after it is checked against it like any other.

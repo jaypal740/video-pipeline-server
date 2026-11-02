@@ -7,7 +7,7 @@ from dependency_injector import providers
 from src.core.container import Container
 from src.schema.asset.asset_schema import ReviewState
 from src.schema.enums import StageName, StageStatus
-from src.schema.image.image_check_schema import Answer, Checklist
+from src.schema.image.image_check_schema import Answer, AskedFor, Checklist, Fill
 from src.schema.lesson.lesson_schema import GradeBand, VideoType
 from src.schema.run.run_schema import Run
 from src.schema.run.stage_state_schema import StageState
@@ -17,15 +17,19 @@ from src.service.llm.llm_service import ProviderReply
 from src.service.storage.storage_service import LocalStorage
 
 BOARD = {
-    "grade_band": "3-5", "video_type": "journey", "shape": "s", "host_outfit": "explorer", "motifs": [], "flags": [],
-    "model": "m",
+    "grade_band": "3-5", "video_type": "journey", "shape": "s", "motifs": [], "flags": [], "model": "m",
     "prompt_version": "v",
     "cast": [{"id": "host", "kind": "person", "look": "A man", "size": "tall", "scale": "human"},
              {"id": "operator", "kind": "person", "look": "A Victorian man in a brown waistcoat", "size": "average",
               "scale": "human"},
              {"id": "ship", "kind": "thing", "look": "A wooden steamship with three masts", "size": "70 m", "scale": "landscape"}],
-    "places": [{"id": "sea", "look": "A grey Atlantic", "lighting": "overcast", "scale": "landscape", "walkable": True}],
-    "shots": [],
+    "places": [{"id": "sea", "look": "A grey Atlantic", "lighting": "overcast", "scale": "landscape", "walkable": True,
+                "host_outfit": "explorer"}],
+    "shots": [{"id": "s02", "slot": "s02", "start": 4.0, "end": 8.0, "lines": [1], "kind": "sung", "repeat_of": None,
+               "performer": "host", "continuity": "new_scene", "place": "sea", "subjects": ["host"],
+               "size": "medium_close", "angle": "eye", "position": "centre", "start_state": "s", "action": "a",
+               "end_state": "e", "camera": {"move": "static"}, "motion": "low", "screen_direction": "none",
+               "transition_in": "cut"}],
 }
 
 
@@ -64,22 +68,45 @@ class FakeVision:
         self.fail_first = fail_first
         self.fail_when = None
         self.failed_when = 0
+        self.extra_answer = False
+        self.asked_for = []
+        self.drop = 0          # this many replies leave out the score and every rule answer
         self.checks = 0
+        self.seen = []
 
     def parse(self, *a, **k):
         raise AssertionError("no text calls expected")
 
     def inspect(self, model, system, user, images, output_type):
+        self.seen.append((user, [i.label for i in images]))
+        if output_type is Fill:                                 # a follow-up: answer only the rules asked for
+            asked = [line.split(". ", 1)[1] for line in user.split("leave every other field empty:\n", 1)[1].splitlines()
+                     if line.startswith("- rule ")]
+            if self.drop > 0:
+                self.drop -= 1
+                return ProviderReply(output=Fill(asked_for=[], score=None, score_reason=None, answers=[]),
+                                     model=model, input_tokens=6000, output_tokens=20, cost_usd=0.001)
+            asked_for = [AskedFor(item="what the moment asks for", reason="it is there", ok=True)]
+            return ProviderReply(output=Fill(asked_for=asked_for, score=9, score_reason="a close match",
+                                             answers=[Answer(rule=r, ok=True, reason="") for r in asked]),
+                                 model=model, input_tokens=6000, output_tokens=200, cost_usd=0.001)
         self.checks += 1
-        questions = [line.split(". ", 1)[1] for line in user.splitlines()[1:]]
-        answers = [Answer(question=q, ok=True, reason="") for q in questions]
+        moment = [AskedFor(item="what the moment asks for", reason="it is there", ok=True)] if "Opening moment:" in user else []
+        asked_for = self.asked_for or moment
+        if self.drop > 0:
+            self.drop -= 1
+            return ProviderReply(output=Checklist(asked_for=[], score=0, score_reason="", answers=[]),
+                                 model=model, input_tokens=6000, output_tokens=20, cost_usd=0.001)
+        rules = [line.split(". ", 1)[1] for line in user.split("Rules:\n", 1)[1].splitlines() if line.strip()]
+        answers = [Answer(rule=r, ok=True, reason="") for r in rules]
+        if self.extra_answer:
+            answers.append(Answer(rule="a rule the judge made up", ok=False, reason="ignored"))
         hit = self.fail_when is not None and self.fail_when[0] in user and self.failed_when < self.fail_when[1]
         if hit:
             self.failed_when += 1
-        if self.checks <= self.fail_first or hit:
-            answers[1] = Answer(question=questions[1], ok=False, reason="the waistcoat is blue")
-        return ProviderReply(output=Checklist(answers=answers), model=model, input_tokens=6000, output_tokens=200,
-                             cost_usd=0.001)
+        score, reason = (4, "the waistcoat is blue") if (self.checks <= self.fail_first or hit) else (9, "a close match")
+        return ProviderReply(output=Checklist(asked_for=asked_for, score=score, score_reason=reason, answers=answers), model=model,
+                             input_tokens=6000, output_tokens=200, cost_usd=0.001)
 
 
 @pytest.fixture
@@ -139,6 +166,9 @@ def test_sheets_are_drawn_in_the_host_style_checked_and_costed(stage, container)
     explorer = service.host_sheets(GradeBand.G3_5, "explorer")
     assert set(explorer) == {"front", "three_quarter", "to_camera", "smiling", "angry"}
     assert "field jacket" in explorer["front"].prompt and "now dressed as described" in explorer["front"].prompt
+    base = service.host_sheets(GradeBand.G3_5)                  # each outfit view is drawn from the same-angle base view
+    assert explorer["three_quarter"].params["refs"] == [base["three_quarter"].id]
+    assert explorer["to_camera"].params["refs"] == [base["to_camera"].id]
     service.run(run.id, force=True)
     assert len(fal.calls) == drawn_before + 7                   # neither the kit nor the sheets are drawn twice
     assert all(a.review == ReviewState.PASSED for views in sheets.values() for a in views.values())
@@ -152,16 +182,16 @@ def test_sheets_are_drawn_in_the_host_style_checked_and_costed(stage, container)
 def test_a_failed_sheet_is_redrawn_then_left_for_review_and_never_passed(stage, container):
     service, fal, vision = stage
     approve_a_host(service, fal)
-    vision.fail_when = ("Victorian", 3)                        # the operator's front view fails three times
+    vision.fail_when = ("Victorian", 2)                        # the operator's front view fails both draws
     run = board_run(container)
     sheets = service.run(run.id)
     operator = sheets["operator"]["front"]
     assert operator.review == ReviewState.NEEDS_REVIEW and "waistcoat is blue" in operator.review_notes
-    assert operator.params["try"] == 3 and "/3-" in operator.path
+    assert operator.params["try"] == 2 and "/2-" in operator.path
     tries = [a for a in container.asset_repository().assets.list(run_id=run.id, target_id="operator")
              if a.params["view"] == "front"]
-    assert sorted(a.params["try"] for a in tries) == [1, 2, 3]
-    assert [a.review for a in sorted(tries, key=lambda a: a.params["try"])][:2] == [ReviewState.FAILED] * 2
+    assert sorted(a.params["try"] for a in tries) == [1, 2]
+    assert [a.review for a in sorted(tries, key=lambda a: a.params["try"])][0] == ReviewState.FAILED
     state = container.run_repository().stage(run.id, StageName.VISUAL_IDENTITY)
     assert state.status == StageStatus.WAITING_GATE and state.output["needs_review"] == [operator.id]
 

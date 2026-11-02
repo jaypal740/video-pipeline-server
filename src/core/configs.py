@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     keyframe_model: str = Field(default="nano-banana-2.1", validation_alias="PIPELINE_KEYFRAME_MODEL")
     image_check_model: str = Field(default="claude-haiku-5-5", validation_alias="PIPELINE_IMAGE_CHECK_MODEL")
     image_workers: int = Field(default=4, validation_alias="PIPELINE_IMAGE_WORKERS")
+    # The judge's 0-10 score an image needs to pass; below it the image is drawn again. The judge gives a 6
+    # to "the right picture with one small difference", which is good enough for a viewer.
+    image_pass_score: int = Field(default=6, validation_alias="PIPELINE_IMAGE_PASS_SCORE")
+    # Draws per image before it waits for a person (the first draw plus retries), and the stop-loss: a stage
+    # pauses when more than this share of its first STOP_LOSS_AFTER finished images failed every draw.
+    image_max_tries: int = Field(default=2, validation_alias="PIPELINE_IMAGE_MAX_TRIES")
+    image_stop_loss: float = Field(default=0.5, validation_alias="PIPELINE_IMAGE_STOP_LOSS")
     storage: str = Field(default="local", validation_alias="PIPELINE_STORAGE")
     r2_account_id: str | None = Field(default=None, validation_alias="R2_ACCOUNT_ID")
     r2_access_key_id: str | None = Field(default=None, validation_alias="R2_ACCESS_KEY_ID")

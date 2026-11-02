@@ -106,7 +106,6 @@ class StoryboardService:
             self._fail(state, exc)
             raise
         board = Storyboard(grade_band=plan.grade_band, video_type=plan.video_type, shape=draft.shape,
-                           host_outfit=draft.host_outfit,
                            cast=[host] + draft.cast, places=draft.places, motifs=draft.motifs, shots=shots,
                            flags=flags, model=model, prompt_version=PROMPT_VERSION)
         state.status, state.output, state.finished_at = StageStatus.DONE, board.model_dump(mode="json"), utcnow()

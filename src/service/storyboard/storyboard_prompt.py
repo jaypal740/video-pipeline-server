@@ -4,7 +4,7 @@ from src.schema.storyboard.storyboard_schema import CastMember, ShotKind, Slot, 
 from src.service.storyboard.storyboard_rules import HOST, LIMITS
 
 # Bumped whenever the prompt changes, so every run is boarded again with the new prompt.
-PROMPT_VERSION = "storyboard.v7"
+PROMPT_VERSION = "storyboard.v8"
 
 SYSTEM = f"""You storyboard short educational music videos for school classes. The song, its lesson plan \
 and the shot timings already exist; you decide what each shot shows and how the camera films it. An image \
@@ -22,8 +22,10 @@ cast member with its own id. The host and the host's place are given; never decl
 - places: id, look in at most {LIMITS["place look"]} words, lighting in at most {LIMITS["lighting"]} words, \
 scale (cosmic, planet, landscape, human, object, microscopic, molecular) and walkable: true when a person \
 could really stand there (a deck, a shore, a lab), false for space, underwater, inside a cell.
-- host_outfit: the wardrobe kit the host wears in this video, one of the kit names you are given; pick the \
-one that fits the topic and the places.
+- host_outfit, on every place where the host appears: what the host wears there, fitting that place and \
+the topic (beach clothes on a beach, a lab coat in a lab, a coat on a ship's deck), at most \
+{LIMITS["outfit"]} words of clothes and colours. Name one of the wardrobe kits you are given, or write \
+your own. Leave it out for places the host never appears in.
 - motifs: visual codes kept all video, e.g. thing "antibiotic", rule "always a cyan liquid", the rule in at \
 most {LIMITS["motif rule"]} words. A motif is about appearance only (colour, material, shape), never about \
 where a thing is or what it does. Write each motif's rule into the look of the cast member or place it \
@@ -95,8 +97,11 @@ def user_prompt(plan: LessonPlan, lines: list[LyricLine], slots: list[Slot], ban
                if fmt.max_scale_step else "")
             + f"\n\nHost ({HOST}): {host.look} Size: {host.size}. Wardrobe kits: "
             + "; ".join(f"{kit}: {outfit}" for kit, outfit in wardrobe.items())
-            + f". For a {fmt.type} video the usual kit is {fmt.host_outfit}."
+            + f". For a {fmt.type} video the usual kit is {fmt.host_outfit}; dress the host for each place."
             + ("" if fmt.type == VideoType.PERSONALISED_HERO else " The host appears only in sung shots.")
+            + " Other people are welcome. A person who is clearly seen and comes back in a later shot is a cast "
+              "member with kind person, listed in the subjects of every shot they are in. Passers-by, a crowd, or "
+              "a hand holding something need no cast entry."
             + "\n\n"
             "Slots, in order:\n" + "\n".join(_slot_line(s, by_index, lesson) for s in slots))
 

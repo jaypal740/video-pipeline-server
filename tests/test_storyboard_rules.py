@@ -26,11 +26,11 @@ def shot(slot, place="ship_deck", size=ShotSize.MEDIUM, **changes):
 
 def board(*shots, places=None, cast=None):
     return StoryboardDraft(
-        shape="From the ship to the seabed", host_outfit="explorer", motifs=[Motif(thing="cable", rule="always a dark rope")],
+        shape="From the ship to the seabed", motifs=[Motif(thing="cable", rule="always a dark rope")],
         cast=cast or [CastMember(id="ship", kind=CastKind.THING, look="A wooden steamship with two masts",
                                  size="about 90 metres long", scale=Scale.LANDSCAPE, walkable=True)],
         places=places or [Place(id="ship_deck", look="The deck of a wooden steamship at sea", lighting="grey daylight",
-                                scale=Scale.HUMAN, walkable=True),
+                                scale=Scale.HUMAN, walkable=True, host_outfit="explorer"),
                           Place(id="seabed", look="A dark sandy ocean floor", lighting="dim blue light",
                                 scale=Scale.OBJECT, walkable=True)],
         shots=list(shots))
@@ -119,6 +119,24 @@ def test_shot_words_unknown_ids_and_missing_shots_are_caught():
     assert "only people" in shot_problems(faces, slots(ShotKind.ILLUSTRATE), BAND, FMT, HOST)["s01"][0]
 
 
+def test_a_person_who_comes_back_must_be_a_listed_cast_member():
+    twice = board(shot("s01", size=ShotSize.WIDE, start_state="A girl in a red jacket stands at the rail of the deck"),
+                  shot("s02", action="The girl points at the horizon"))
+    found = shot_problems(twice, slots(ShotKind.ILLUSTRATE, ShotKind.ILLUSTRATE), BAND, FMT, HOST)
+    assert any("a 'girl' appears in s01, s02 but is not a cast member" in p for p in found["s01"])
+    assert any("a 'girl' appears in s01, s02" in p for p in found["s02"])
+    once = board(shot("s01", size=ShotSize.WIDE, start_state="A girl in a red jacket stands at the rail of the deck"),
+                 shot("s02", action="A hand stirs the paint on the deck"))
+    assert "s01" not in shot_problems(once, slots(ShotKind.ILLUSTRATE, ShotKind.ILLUSTRATE), BAND, FMT, HOST)
+    cast = [CastMember(id="ship", kind=CastKind.THING, look="A wooden steamship", size="a ship", scale=Scale.HUMAN),
+            CastMember(id="operator", kind=CastKind.PERSON, look="A sailor in a blue coat", size="an adult",
+                       scale=Scale.HUMAN)]
+    listed = board(shot("s01", size=ShotSize.WIDE, subjects=["ship", "operator"],
+                        start_state="The operator, a woman in a blue coat, shades her eyes on the deck"),
+                   shot("s02", subjects=["operator"], action="The woman points at the horizon"), cast=cast)
+    assert shot_problems(listed, slots(ShotKind.ILLUSTRATE, ShotKind.ILLUSTRATE), BAND, FMT, HOST) == {}
+
+
 def test_assembly_copies_repeats_and_works_out_continuity():
     s = slots(*[ShotKind.ILLUSTRATE] * 3)
     s[2].repeat_of = "s01"
@@ -179,12 +197,15 @@ def test_a_subject_must_fit_the_scale_of_its_place():
 
 
 def test_a_sung_shot_needs_a_walkable_place_and_a_real_kit():
-    places = [Place(id="ship_deck", look="A deck", lighting="day", scale=Scale.HUMAN, walkable=True),
-              Place(id="seabed", look="The ocean floor", lighting="dim", scale=Scale.LANDSCAPE, walkable=False)]
-    s = slots(ShotKind.SUNG, ShotKind.SUNG)
+    places = [Place(id="ship_deck", look="A deck", lighting="day", scale=Scale.HUMAN, walkable=True,
+                    host_outfit="a navy wool sailor's coat over a cream jumper, a knitted cap and sturdy boots"),
+              Place(id="seabed", look="The ocean floor", lighting="dim", scale=Scale.LANDSCAPE, walkable=False),
+              Place(id="shore", look="A shingle beach", lighting="dawn", scale=Scale.LANDSCAPE, walkable=True)]
+    s = slots(ShotKind.SUNG, ShotKind.SUNG, ShotKind.SUNG)
     draft = board(shot("s01", subjects=["host"], size=ShotSize.MEDIUM_CLOSE),
-                  shot("s02", place="seabed", subjects=["host"], size=ShotSize.MEDIUM_CLOSE), places=places)
+                  shot("s02", place="seabed", subjects=["host"], size=ShotSize.MEDIUM_CLOSE),
+                  shot("s03", place="shore", subjects=["host"], size=ShotSize.MEDIUM_CLOSE), places=places)
     found = shot_problems(draft, s, BAND, FMT, HOST)
-    assert "s01" not in found and "not walkable" in found["s02"][0]
-    draft.host_outfit = "spacesuit"
-    assert any("host_outfit must be one of" in p for p in header_problems(draft, BAND, s))
+    assert "s01" not in found and "not walkable" in found["s02"][0] and "needs a host_outfit" in found["s03"][0]
+    places[0].host_outfit = "a coat with 1858 printed on the back"
+    assert any("host_outfit has digits" in p for p in header_problems(draft, BAND, s))

@@ -9,6 +9,7 @@ from src.schema.asset.asset_schema import Asset, ReviewState
 from src.schema.asset.cost_entry_schema import CostEntry
 from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
+from src.schema.image.image_check_schema import Brief
 from src.schema.lesson.lesson_schema import GradeBand
 from src.schema.run.stage_state_schema import StageState
 from src.schema.storyboard.storyboard_schema import CastKind, CastMember, Place, Storyboard
@@ -16,17 +17,16 @@ from src.service.image.fal_image_service import RESOLUTION, FalImageService
 from src.service.image.image_check_service import ImageCheckService
 from src.service.lesson.lesson_rules import band_rules
 from src.service.llm.llm_service import LabelledImage
-from src.service.sheet.sheet_prompt import (FACE_VIEWS, HOST_VIEWS, PLATE, Style, aspect_for, plate_prompt,
-                                            plate_questions, sheet_prompt, sheet_questions, views_for)
+from src.service.sheet.sheet_prompt import (FACE_VIEWS, HOST_VIEWS, PLATE, Style, aspect_for, plate_brief,
+                                            plate_prompt, sheet_brief, sheet_prompt, views_for)
 from src.service.sheet.sheet_layout import compose_sheet
 from src.service.storage.storage_service import Storage
-from src.service.storyboard.storyboard_rules import HOST, host_in
+from src.service.storyboard.storyboard_rules import HOST, host_in, outfit_text, wardrobe_for
 
 logger = logging.getLogger(__name__)
 
-# Draws per image before it is left for a person: the first, then a new seed, then a new seed with
-# more thinking (plain references want minimal thinking: the model then spends less effort on annotations).
-MAX_TRIES = 3
+# Plain references want minimal thinking: the model then spends less effort on annotations. The last try
+# of an image thinks a little more. How many tries an image gets is a setting (image_max_tries).
 URL_SECONDS = 3600
 # The outfit the host is approved in; other wardrobe kits are drawn from it on first use.
 BASE_KIT = "everyday"
@@ -58,12 +58,12 @@ class SheetService:
         for review in (ReviewState.PENDING, ReviewState.FAILED):
             self._assets.assets.delete_where(run_id=None, target_id=self._target(band, BASE_KIT, "front"), review=review)
         made = []
-        questions = sheet_questions(host, "front")
+        brief = sheet_brief(host, "front")
 
         def draw(n: int):
             reply = self._images.generate(self._settings.host_model, prompt, [], aspect_for(host, "front"), seed=n,
                                           thinking="minimal")
-            return reply, self._check.check(reply.data, [], questions)[0].problems()
+            return reply, self._check.problems(self._check.check(reply.data, [], brief)[0])
 
         with ThreadPoolExecutor(max_workers=count) as pool:
             drawn = list(pool.map(draw, range(1, count + 1)))
@@ -100,30 +100,41 @@ class SheetService:
                 continue
             made.append(self._draw(None, f"hosts/{band}/{BASE_KIT}/{view}.png", self._target(band, BASE_KIT, view),
                                    view, sheet_prompt(style, host, view, reference="same"), anchor,
-                                   aspect_for(host, view), sheet_questions(host, view), self._settings.host_model))
+                                   aspect_for(host, view), sheet_brief(host, view), self._settings.host_model))
         self._storage.put(f"hosts/{band}/sheet.png", compose_sheet(
             [(a.params["view"], self._storage.get(a.path)) for a in made]), "image/png")
         return made
 
-    def ensure_kit(self, band: GradeBand, kit: str) -> dict[str, Asset]:
-        """The host dressed in one wardrobe kit, drawn once per band from the approved face: the views a
-        video needs (front, three-quarter, to camera); the face views are shared with the base kit."""
-        found = self.host_sheets(band, kit)
+    def ensure_outfit(self, band: GradeBand, outfit: str) -> dict[str, Asset]:
+        """The host dressed in one outfit (a kit name or the storyboard's own words), drawn once per band:
+        front, three-quarter and to camera, each from the approved base view at the same angle so the pose
+        is already in the reference and only the clothes change. The same words are never drawn twice."""
+        key = self.outfit_key(band, outfit)
+        found = self.host_sheets(band, key)
         if all(view in found for view in KIT_VIEWS):
             return found
         base = self.host_sheets(band, BASE_KIT)
         if "front" not in base:
             raise ValueError(f"grades {band} have no approved host yet; run `host draw` and `host approve` first")
-        host, style = host_in(band, kit), Style.of(band_rules(band))
+        host, style = host_in(band, outfit), Style.of(band_rules(band))
+        logger.info("host %s: drawing outfit %r (%s)", band, outfit_text(band, outfit), key)
         for view in KIT_VIEWS:
             if view not in found:
-                found[view] = self._draw(None, f"hosts/{band}/{kit}/{view}.png", self._target(band, kit, view), view,
-                                         sheet_prompt(style, host, view, reference="same_person"), [base["front"]],
-                                         aspect_for(host, view), sheet_questions(host, view), self._settings.host_model)
+                found[view] = self._draw(None, f"hosts/{band}/{key}/{view}.png", self._target(band, key, view), view,
+                                         sheet_prompt(style, host, view, reference="same_person"),
+                                         [base.get(view, base["front"])],
+                                         aspect_for(host, view), sheet_brief(host, view), self._settings.host_model)
         return found
 
+    @staticmethod
+    def outfit_key(band: GradeBand, outfit: str) -> str:
+        """Where an outfit's views live: a kit by its name, free words by a short hash of them."""
+        if outfit in wardrobe_for(band):
+            return outfit
+        return "outfit-" + hashlib.sha256(outfit_text(band, outfit).lower().encode()).hexdigest()[:8]
+
     def recheck_host(self, band: GradeBand) -> list[Asset]:
-        """Run the image check again on the host's views waiting for review, with the current questions.
+        """Run the image check again on the host's views waiting for review, with the current brief.
         No image is drawn; a view that now passes becomes usable."""
         host = host_in(band, BASE_KIT)
         changed = []
@@ -131,7 +142,7 @@ class SheetService:
             if not asset.target_id.startswith(f"host:{band}:"):
                 continue
             view = asset.params["view"]
-            problems = self._check.check(self._storage.get(asset.path), [], sheet_questions(host, view))[0].problems()
+            problems = self._check.problems(self._check.check(self._storage.get(asset.path), [], sheet_brief(host, view))[0])
             asset.review = ReviewState.PASSED if not problems else ReviewState.NEEDS_REVIEW
             asset.review_notes = "\n".join(problems) or None
             changed.append(self._assets.assets.update(asset))
@@ -149,7 +160,7 @@ class SheetService:
         host, style = host_in(band, BASE_KIT), Style.of(band_rules(band))
         made = self._draw(None, f"hosts/{band}/{BASE_KIT}/{view}.png", self._target(band, BASE_KIT, view), view,
                           sheet_prompt(style, host, view, reference="same"), [base["front"]], aspect_for(host, view),
-                          sheet_questions(host, view), self._settings.host_model)
+                          sheet_brief(host, view), self._settings.host_model)
         self.compose_host_sheet(band)
         return made
 
@@ -192,9 +203,11 @@ class SheetService:
         board = self._board(run_id)
         band = board.grade_band
         hosts = self.host_sheets(band)
-        if any(view not in hosts for view in HOST_VIEWS):
+        if any(view not in hosts for view in KIT_VIEWS):              # side, back and expressions are optional
             raise ValueError(f"grades {band} have no approved host yet; run `host draw` and `host approve` first")
-        self.ensure_kit(band, board.host_outfit)                      # the host dressed for this video
+        for place in board.places:                                    # the host dressed for each place
+            if place.host_outfit and any(HOST in s.subjects and s.place == place.id for s in board.shots):
+                self.ensure_outfit(band, place.host_outfit)
         style, anchor = Style.of(band_rules(band)), [hosts["front"]]
         jobs = [(m, view) for m in board.cast if m.id != HOST for view in views_for(m)]
         jobs += [(p, PLATE) for p in board.places]
@@ -238,21 +251,22 @@ class SheetService:
         if view == PLATE:
             return self._draw(run_id, f"runs/{run_id}/sheets/{target.id}/plate.png", target.id, view,
                               plate_prompt(style, target, reference="style"), anchor, aspect_for(None, PLATE),
-                              plate_questions(target), self._settings.sheet_model)
+                              plate_brief(target), self._settings.sheet_model)
         return self._draw(run_id, f"runs/{run_id}/sheets/{target.id}/{view}.png", target.id, view,
                           sheet_prompt(style, target, view, reference="style"), anchor, aspect_for(target, view),
-                          sheet_questions(target, view), self._settings.sheet_model)
+                          sheet_brief(target, view), self._settings.sheet_model)
 
     # --- drawing, checking, storing ---------------------------------------------------------------------
 
     def _draw(self, run_id: str | None, key: str, target_id: str, view: str, prompt: str, refs: list[Asset],
-              aspect: str, questions: list[str], model: str) -> Asset:
-        """Draw, check, and try again on a new seed; after MAX_TRIES the last try is left for review. The seed
+              aspect: str, brief: Brief, model: str) -> Asset:
+        """Draw, check, and try again on a new seed; after the last try the image is left for review. The seed
         comes from the prompt and references, so the same look draws the same image in any run."""
+        max_tries = self._settings.image_max_tries
         base = int(hashlib.sha256("|".join([prompt, *(r.sha256 for r in refs)]).encode()).hexdigest()[:8], 16) % 2**31
         ref_urls = [self._url(r) for r in refs]
-        for attempt in range(1, MAX_TRIES + 1):
-            seed, thinking = base + attempt - 1, "medium" if attempt == MAX_TRIES else "minimal"
+        for attempt in range(1, max_tries + 1):
+            seed, thinking = base + attempt - 1, "medium" if attempt == max_tries else "minimal"
             cache_key = self._cache_key(model, prompt, refs, seed, aspect, thinking)
             cached = self._assets.find_cached(cache_key)
             if cached is not None and cached.review in USABLE:
@@ -263,22 +277,23 @@ class SheetService:
                                 aspect=aspect, cache_key=cache_key)
             labelled = [LabelledImage(label=f"reference sheet for {r.target_id}", data=self._storage.get(r.path))
                         for r in refs]
-            checklist, call = self._check.check(reply.data, labelled, questions)
+            checklist, call = self._check.check(reply.data, labelled, brief)
             self._log_cost(run_id, StageName.VISUAL_IDENTITY, call.provider, call.model, call.cost_usd, target_id,
                            call.input_tokens + call.output_tokens, "tokens")
-            problems = checklist.problems()
+            problems = self._check.problems(checklist)
+            asset.params = {**asset.params, "score": checklist.score}
             if not problems:
                 asset.review = ReviewState.PASSED
                 self._assets.assets.update(asset)
                 logger.info("sheet %s/%s: passed on try %d, $%.3f, %.1fs", target_id, view, attempt, reply.cost_usd,
                             reply.seconds)
                 return asset
-            asset.review = ReviewState.NEEDS_REVIEW if attempt == MAX_TRIES else ReviewState.FAILED
+            asset.review = ReviewState.NEEDS_REVIEW if attempt == max_tries else ReviewState.FAILED
             asset.review_notes = "\n".join(problems)
             self._assets.assets.update(asset)
             logger.warning("sheet %s/%s: try %d failed %d checks:\n%s", target_id, view, attempt, len(problems),
                            "\n".join(f"  - {p}" for p in problems))
-        logger.warning("sheet %s/%s: left for review after %d tries", target_id, view, MAX_TRIES)
+        logger.warning("sheet %s/%s: left for review after %d tries", target_id, view, max_tries)
         return asset
 
     def _store(self, run_id: str | None, key: str, reply, prompt: str, refs: list[Asset], attempt: int,

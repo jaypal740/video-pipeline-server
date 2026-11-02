@@ -1,4 +1,5 @@
 from src.schema.storyboard.storyboard_schema import CastKind, CastMember, Place, Shot, ShotKind, ShotSize
+from src.schema.image.image_check_schema import Brief
 from src.service.sheet.sheet_prompt import Style
 
 # Which sheet view a subject is drawn from: the front for wide framings, three-quarter when closer.
@@ -12,10 +13,10 @@ _POSITION_WORDS = {"left_third": "the main subject in the left third", "centre":
 
 
 def view_for(member: CastMember, shot: Shot) -> str:
+    if member.kind != CastKind.PERSON:                          # a thing has one view, whatever the shot
+        return "front"
     if shot.kind == ShotKind.SUNG:
         return "to_camera"
-    if member.kind != CastKind.PERSON:
-        return "front"
     return "front" if shot.size in _FRONT_SIZES else "three_quarter"
 
 
@@ -32,22 +33,25 @@ def keyframe_prompt(style: Style, shot: Shot, place: Place, subjects: list[CastM
     return " ".join(lines)
 
 
-def keyframe_questions(shot: Shot, place: Place, subjects: list[CastMember]) -> list[str]:
-    people = [m for m in subjects if m.kind == CastKind.PERSON]
-    things = [m for m in subjects if m.kind != CastKind.PERSON]
-    count = (f"exactly {len(people)} {'person' if len(people) == 1 else 'people'}" if people else "no people")
-    found = [f"Count first: {count}, and these things once each: {', '.join(m.id.replace('_', ' ') for m in things) or 'none'}; "
-             "no extra people, creatures or characters"]
-    for i, m in enumerate(subjects, start=2):
-        found.append(f"The {m.id.replace('_', ' ')} matches its reference sheet (image {i}) in colours, "
-                     f"{'clothing, ' if m.kind == CastKind.PERSON else ''}materials and shape")
-    found += [
-        f"The place matches its reference plate (image {len(subjects) + 2}) with the same lighting",
-        f"This is the opening moment before anything has happened, matching: {shot.start_state}",
-        f"The framing is about a {_SIZE_WORDS[shot.size].lower()} with {_POSITION_WORDS[shot.position]}",
-        "No letters, digits, labels, arrows, charts or diagram marks anywhere",
-        "Nothing warped, duplicated or cut off; suitable for school children",
-    ]
-    if things:
-        found.append("No face, eyes, mouth or human expression on anything that is not a person")
-    return found
+def ref_label(kind: str, ref_id: str) -> str:
+    """How a reference image is labelled for the judge, so the rules can name it instead of numbering it. The
+    kind keeps a place and a cast member with similar ids (air_molecules_view, air_molecules) apart."""
+    return f"the {kind} {ref_id}"
+
+
+def keyframe_brief(shot: Shot, place: Place, subjects: list[CastMember]) -> Brief:
+    """What the judge scores a keyframe against. Who and what the shot shows comes from its opening moment,
+    which the judge reads and writes its own checks from; the rules here hold for every shot."""
+    who = ", ".join(m.id.replace("_", " ") for m in subjects) or "none, the moment and the place carry the shot"
+    description = (f"The opening moment above, before anything has happened. The place is {place.look}, "
+                   f"{place.lighting}. Cast members with a reference image: {who}. Framing: a "
+                   f"{_SIZE_WORDS[shot.size].lower()} with {_POSITION_WORDS[shot.position]}.")
+    rules = [f"The setting is the same place as in the image labelled '{ref_label('place', place.id)}': same ground, "
+             "sky, landmarks and light; things the opening moment adds to it are fine"]
+    for m in subjects:                                          # the judge finds each reference by its label
+        rules.append(f"The {m.id.replace('_', ' ')} is the same one as in the image labelled '{ref_label('cast member', m.id)}': "
+                     f"same {'face, hair and clothes' if m.kind == CastKind.PERSON else 'shape, colours and materials'}")
+    rules += ["No letters, digits, labels, arrows, charts or diagram marks anywhere",
+              "No face, eyes, mouth or human expression on anything that is not a person",
+              "Nothing warped, melted together or broken; suitable for school children"]
+    return Brief(description=description, rules=rules, moment=shot.start_state)

@@ -24,11 +24,11 @@ def shot(slot, size="medium", action="The colony spreads across the dish"):
 
 
 def board(*shots, cast=None):
-    return {"shape": "From one colony to a full dish", "host_outfit": "science_club", "motifs": [],
+    return {"shape": "From one colony to a full dish", "motifs": [],
             "cast": cast or [{"id": "colony", "kind": "thing", "look": "A teal bacterial colony", "size": "a few mm",
                               "scale": "object"}],
             "places": [{"id": "dish", "look": "A clear glass petri dish on a white bench", "lighting": "soft daylight",
-                        "scale": "object", "walkable": True}],
+                        "scale": "object", "walkable": True, "host_outfit": "science_club"}],
             "shots": list(shots) or [shot("s01", size="wide"), shot("s02"), shot("s03")]}
 
 
@@ -154,4 +154,4 @@ def test_a_sung_shot_happens_in_a_walkable_place_in_the_chosen_kit(container, ru
     result = storyboard(container, claude).run(run.id)
     sung = result.shots[2]
     assert sung.kind == "sung" and sung.place == "dish" and sung.performer == "host"
-    assert result.host_outfit == "science_club" and "Wardrobe kits: everyday:" in claude.prompts[0]
+    assert result.places[0].host_outfit == "science_club" and "Wardrobe kits: everyday:" in claude.prompts[0]

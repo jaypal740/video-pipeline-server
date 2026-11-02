@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+from src.schema.image.image_check_schema import Brief
 from src.schema.lesson.lesson_schema import BandRules
 from src.schema.storyboard.storyboard_schema import CastKind, CastMember, Place
 
@@ -30,7 +31,8 @@ ASPECTS = {**{v: "3:4" for v in BODY_VIEWS}, **{v: "1:1" for v in FACE_VIEWS}, "
 STYLE_LINE = ("Drawn in exactly the same illustration style as image 1, the same linework, shading and palette, "
               "showing a different subject.")
 SAME_LINE = "The same person as in image 1, with the same face, hair and clothes."
-SAME_PERSON_LINE = "The same person as in image 1, with the same face, hair and body, now dressed as described."
+SAME_PERSON_LINE = ("The same person as in image 1, in the same pose and from the same angle, with the same face, "
+                    "hair and body, now dressed as described.")
 
 _STANCE = {"front": "standing facing the viewer, relaxed, arms at the sides",
            "three_quarter": "standing with the whole body turned 45 degrees to the right of the viewer, so the left "
@@ -98,34 +100,37 @@ def plate_prompt(style: Style, place: Place, reference: str | None) -> str:
     return f"{text} {STYLE_LINE}" if reference == "style" else text
 
 
-def sheet_questions(member: CastMember, view: str) -> list[str]:
-    """What the image check asks about a sheet. Built from the look; no banned-word lists."""
-    whole = ("the face and shoulders" if view in FACE_VIEWS else
-             "the whole body from head to feet" if member.kind == CastKind.PERSON else "the whole object")
-    visible = ("only what a head-and-shoulders view can show: hair, face and the top garment" if view in FACE_VIEWS
-               else "only what this angle can show (a back view shows no face or front prints; a side view shows one side)")
-    found = [
-        "Exactly one subject on a plain single-colour ground (a soft floor shadow is fine): no scene, props or "
-        "extra figures",
-        f"The subject matches the main features of this description as far as the angle shows, judging {visible}: "
-        f"hair colour and length, the main clothing items and their colours, footwear when the feet are visible. "
-        f"Ignore pose, expression, exact skin shade and how garments are worn (sleeves, cuffs, tucking, parting): "
-        f"{member.look}",
-        f"{whole.capitalize()} is in frame and the view is: {_VIEW_WORDS.get(view, view.replace('_', ' '))}",
-        "No letters, digits, labels, logos or watermarks anywhere",
-        "Nothing warped, duplicated or cut off; suitable for school children",
-    ]
-    if member.kind != CastKind.PERSON:
-        found.append("The subject has no face, eyes, mouth or human expression; it looks like the real thing")
-    return found
+def sheet_brief(member: CastMember, view: str) -> Brief:
+    """What the judge scores a sheet against, and the hard rules. The description names the kind of
+    thing, its shape, colours and materials; small details are for the score, not for a rule."""
+    if member.kind == CastKind.PERSON:
+        angle = _VIEW_WORDS.get(view, view.replace("_", " "))
+        shown = ("the face, hair and top garment" if view in FACE_VIEWS else "hair, clothes and footwear as far as "
+                 "this angle shows them (a back view shows no face; a side view shows one side)")
+        description = (f"A single person, {angle}: {member.look}. Judge {shown}. Ignore pose, expression, exact "
+                       "skin shade and how garments are worn.")
+        whole = "The face and shoulders are in frame" if view in FACE_VIEWS else "The whole body from head to feet is in frame"
+        rules = [f"{whole} and the view is: {angle}",
+                 "Exactly one person on a plain single-colour ground (a soft floor shadow is fine): no scene, props or extra figures",
+                 "No letters, digits, labels, logos or watermarks anywhere, including on clothing and shoes",
+                 "Nothing warped or duplicated; suitable for school children"]
+    else:
+        description = (f"A single {member.id.replace('_', ' ')}: {member.look}. Judge the kind of object, its overall "
+                       "shape, its main colours and materials; small details such as edge sharpness, reflections and "
+                       "texture only shade the score.")
+        rules = ["Exactly one object on a plain single-colour ground (a soft contact shadow is fine): no scene or extra objects",
+                 "The whole object is in frame",
+                 "No letters, digits, labels, logos or watermarks anywhere",
+                 "The object has no face, eyes, mouth or human expression; it looks like the real thing",
+                 "Nothing warped or duplicated; suitable for school children"]
+    return Brief(description=description, rules=rules)
 
 
-def plate_questions(place: Place) -> list[str]:
-    return [
-        "An empty place with no people, animals or characters in it",
-        f"The place matches this description: {place.look}",
-        f"The lighting matches this description: {place.lighting}",
-        "The middle of the picture is clear enough to put a subject in later",
-        "No letters, digits, labels, signs or watermarks anywhere",
-        "Nothing warped or cut off; suitable for school children",
-    ]
+def plate_brief(place: Place) -> Brief:
+    """What the judge scores an empty place plate against. A wide view is cropped by its frame by nature,
+    so cropping is never a rule; the scene and its light are what count."""
+    return Brief(description=(f"An empty wide view of a place: {place.look}. Light roughly {place.lighting}. Judge "
+                              "whether this is that place, with that kind of light, as a backdrop for later shots."),
+                 rules=["An empty place with no people, animals or characters in it",
+                        "No letters, digits, labels, signs or watermarks anywhere",
+                        "Nothing warped or broken; suitable for school children"])

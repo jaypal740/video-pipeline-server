@@ -20,3 +20,9 @@ class RunRepository:
     def stages(self, run_id: str, session: Session | None = None) -> list[StageState]:
         order = list(StageName)
         return sorted(self.stage_states.list(session=session, run_id=run_id), key=lambda s: order.index(s.stage))
+
+    def waiting_review(self, run_id: str, session: Session | None = None) -> list[str]:
+        """The asset ids this run's stages are waiting on a person for, wherever those images were drawn:
+        a stage lists them in its output, so a reused image from an earlier run is included."""
+        return [asset_id for state in self.stages(run_id, session=session)
+                for asset_id in (state.output or {}).get("needs_review", [])]
