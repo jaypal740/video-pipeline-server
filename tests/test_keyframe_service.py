@@ -253,10 +253,24 @@ def test_the_judge_writes_the_shots_checks_from_its_opening_moment(stage, contai
     made = service.run(run.id)
     user = next(u for u, labels in vision.seen if labels == ["the picture to check", "the place sea", "the cast member ship"])
     assert "Opening moment:\nThe ship sits on the grey sea" in user and "once each" not in user
-    assert made["s01"].review == ReviewState.USED_BEST                                    # a failed item fails the try
+    assert made["s01"].review == ReviewState.PASSED and made["s01"].params["try"] == 1  # the score decides
     assert "the moment asks for no people beyond the ones listed: two people walk" in made["s01"].review_notes
     assert made["s01"].params["asked_for"][0]["ok"] is False                             # kept on the image
     vision.asked_for = []
+
+
+def test_only_the_score_and_the_fatal_rules_fail_a_try(stage, container):
+    service, sheets, fal, vision = stage
+    vision.fail_rule = "same place as in the image"              # advisory: noted, never a retry
+    made = service.run(ready_run(container, sheets).id)
+    assert all(a.review == ReviewState.PASSED and a.params["try"] == 1 for a in made.values())
+    assert "same place as in the image" in made["s01"].review_notes
+    vision.fail_rule = "laid on the picture"                     # fatal: text on the picture fails the try
+    made = service.run(ready_run(container, sheets, operator="A sailor in a green scarf").id)   # s03 is new
+    tries = container.asset_repository().assets.list(run_id=made["s03"].run_id, stage=StageName.KEYFRAMES, target_id="s03")
+    assert len(tries) == 2 and made["s03"].review == ReviewState.USED_BEST                 # both failed; score 9 ≥ floor
+    assert any("laid on the picture" in c for c in vision.corrections)                   # the retry was told why
+    vision.fail_rule = None
 
 
 def test_a_judge_reply_that_left_parts_out_is_asked_for_those_only(stage, container):

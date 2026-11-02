@@ -47,6 +47,7 @@ class Attempt(BaseModel):
     fix: LlmCall | None = None
     score: int
     asked_for: list[dict]
+    notes: list[str]
     cache_key: str
     reply: ImageReply
     problems: list[str]
@@ -156,13 +157,13 @@ class KeyframeService:
             labelled = [LabelledImage(label=ref_label(kind, name), data=self._storage.get(r.path))
                         for (kind, name), r in zip([('place', shot.place), *(('cast member', s) for s in shot.subjects)], refs)]
             checklist, call = self._check.check(self._storage.get(asset.path), labelled, brief)
-            problems = self._check.problems(checklist)
+            problems = self._check.problems(checklist, brief)
             self._cost(run_id, call.provider, call.model, call.cost_usd, shot.id, call.input_tokens + call.output_tokens,
                        "tokens")
             asset.params = {**asset.params, "score": checklist.score,
                             "asked_for": [a.model_dump() for a in checklist.asked_for]}
             asset.review = ReviewState.PASSED if not problems else ReviewState.FAILED
-            asset.review_notes = "\n".join(problems) or None
+            asset.review_notes = "\n".join(self._check.notes(checklist)) or None
             self._assets.assets.update(asset)
             logger.info("keyframe %s try %d rechecked: %s, %d/10", shot.id, asset.params["try"], asset.review,
                         checklist.score)
@@ -280,10 +281,10 @@ class KeyframeService:
             drawn = f"{prompt} {correction}" if correction else prompt
             reply = self._images.generate(model, drawn, urls, ASPECT, seed=seed, thinking=thinking)
             checklist, call = self._check.check(reply.data, labelled, brief)
-            problems = findings = self._check.problems(checklist)
+            problems, findings = self._check.problems(checklist, brief), self._check.notes(checklist)
             tries.append(Attempt(attempt=attempt, seed=seed, thinking=thinking, prompt=drawn, correction=correction,
                                  fix=fix, score=checklist.score,
-                                 asked_for=[a.model_dump() for a in checklist.asked_for],
+                                 asked_for=[a.model_dump() for a in checklist.asked_for], notes=findings,
                                  cache_key=cache_key, reply=reply,
                                  problems=problems, check=call))
             if not problems:
@@ -334,7 +335,7 @@ class KeyframeService:
                 params={"view": "keyframe", "try": t.attempt, "aspect": ASPECT, "resolution": RESOLUTION,
                         "thinking": t.thinking, "refs": [r.id for r in refs], "seconds": t.reply.seconds,
                         "score": t.score, "asked_for": t.asked_for, "correction": t.correction},
-                cost_usd=t.reply.cost_usd, review=review, review_notes="\n".join(t.problems) or None))
+                cost_usd=t.reply.cost_usd, review=review, review_notes="\n".join(t.notes) or None))
             self._cost(run_id, self._images.name, t.reply.model, t.reply.cost_usd, shot.id, 1, "image")
             for call in (t.check, t.fix) if t.fix is not None else (t.check,):
                 self._cost(run_id, call.provider, call.model, call.cost_usd, shot.id,

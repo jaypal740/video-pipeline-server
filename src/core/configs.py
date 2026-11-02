@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     host_model: str = Field(default="gpt-image-2", validation_alias="PIPELINE_HOST_MODEL")
     keyframe_model: str = Field(default="nano-banana-2.1", validation_alias="PIPELINE_KEYFRAME_MODEL")
     image_check_model: str = Field(default="claude-haiku-5-5", validation_alias="PIPELINE_IMAGE_CHECK_MODEL")
+    # When the image model returns nothing (a filter, an outage), the same draw is tried once on this model.
+    image_fallback_model: str | None = Field(default="gpt-image-2", validation_alias="PIPELINE_IMAGE_FALLBACK_MODEL")
     image_workers: int = Field(default=4, validation_alias="PIPELINE_IMAGE_WORKERS")
     # The judge's 0-10 score an image needs to pass; below it the image is drawn again. The judge gives a 6
     # to "the right picture with one small difference", which is good enough for a viewer.

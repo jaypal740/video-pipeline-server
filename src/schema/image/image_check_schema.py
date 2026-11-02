@@ -2,11 +2,14 @@ from pydantic import BaseModel, Field
 
 
 class Brief(BaseModel):
-    """What the judge is given: the description the picture is scored against, and the hard rules. A
-    keyframe also gives its opening moment, from which the judge writes that shot's own checks."""
+    """What the judge is given: the description the picture is scored against and the rules it answers.
+    The score decides; a rule fails a try on its own only when it is listed in `fatal` (text laid on the
+    picture, a person who is not cast), because a score cannot be trusted to catch those. A keyframe also
+    gives its opening moment, from which the judge writes that shot's own checks."""
 
     description: str
     rules: list[str]
+    fatal: list[str] = []
     moment: str | None = None
 
 
@@ -42,9 +45,17 @@ class Checklist(BaseModel):
             gaps.append("score")
         return gaps + [f"rule {i}" for i in range(len(self.answers) + 1, len(brief.rules) + 1)]
 
-    def problems(self, pass_score: int) -> list[str]:
+    def notes(self, pass_score: int) -> list[str]:
+        """Everything the judge found wrong, for the record and for the retry's correction."""
         found = [f"the moment asks for {a.item}: {a.reason}" for a in self.asked_for if not a.ok]
         found += [f"{a.rule}: {a.reason}" for a in self.answers if not a.ok]
+        if self.score < pass_score:
+            found.append(f"matches the description {self.score}/10 (needs {pass_score}): {self.score_reason}")
+        return found
+
+    def problems(self, pass_score: int, fatal: list[str]) -> list[str]:
+        """What fails the try: a score under the bar, or a fatal rule answered no."""
+        found = [f"{a.rule}: {a.reason}" for a in self.answers if not a.ok and a.rule in fatal]
         if self.score < pass_score:
             found.append(f"matches the description {self.score}/10 (needs {pass_score}): {self.score_reason}")
         return found

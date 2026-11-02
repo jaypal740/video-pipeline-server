@@ -63,19 +63,20 @@ class SheetService:
         def draw(n: int):
             reply = self._images.generate(self._settings.host_model, prompt, [], aspect_for(host, "front"), seed=n,
                                           thinking="minimal")
-            return reply, self._check.problems(self._check.check(reply.data, [], brief)[0])
+            checklist = self._check.check(reply.data, [], brief)[0]
+            return reply, self._check.problems(checklist, brief), self._check.notes(checklist)
 
         with ThreadPoolExecutor(max_workers=count) as pool:
             drawn = list(pool.map(draw, range(1, count + 1)))
-        for n, (reply, problems) in enumerate(drawn, start=1):
+        for n, (reply, problems, notes) in enumerate(drawn, start=1):
             asset = self._store(None, f"hosts/{band}/candidates/{n}.png", reply, prompt, [], 1,
                                 target_id=self._target(band, BASE_KIT, "front"), view="front",
                                 aspect=aspect_for(host, "front"), candidate=n)
             asset.review = ReviewState.FAILED if problems else ReviewState.PENDING
-            asset.review_notes = "\n".join(problems) or None
+            asset.review_notes = "\n".join(notes) or None
             made.append(self._assets.assets.update(asset))
             logger.info("host %s: candidate %d %s, $%.3f, %.1fs%s", band, n, "failed" if problems else "ok",
-                        reply.cost_usd, reply.seconds, "".join(f"\n  - {p}" for p in problems))
+                        reply.cost_usd, reply.seconds, "".join(f"\n  - {p}" for p in notes))
         return made
 
     def approve_host(self, band: GradeBand, asset_id: str) -> list[Asset]:
@@ -142,9 +143,11 @@ class SheetService:
             if not asset.target_id.startswith(f"host:{band}:"):
                 continue
             view = asset.params["view"]
-            problems = self._check.problems(self._check.check(self._storage.get(asset.path), [], sheet_brief(host, view))[0])
+            brief = sheet_brief(host, view)
+            checklist = self._check.check(self._storage.get(asset.path), [], brief)[0]
+            problems = self._check.problems(checklist, brief)
             asset.review = ReviewState.PASSED if not problems else ReviewState.NEEDS_REVIEW
-            asset.review_notes = "\n".join(problems) or None
+            asset.review_notes = "\n".join(self._check.notes(checklist)) or None
             changed.append(self._assets.assets.update(asset))
             logger.info("host %s/%s rechecked: %s", band, view, "passed" if not problems else "still needs review")
         return changed
@@ -285,8 +288,9 @@ class SheetService:
             checklist, call = self._check.check(reply.data, labelled, brief)
             self._log_cost(run_id, StageName.VISUAL_IDENTITY, call.provider, call.model, call.cost_usd, target_id,
                            call.input_tokens + call.output_tokens, "tokens")
-            problems = self._check.problems(checklist)
+            problems, notes = self._check.problems(checklist, brief), self._check.notes(checklist)
             asset.params = {**asset.params, "score": checklist.score}
+            asset.review_notes = "\n".join(notes) or None
             if not problems:
                 asset.review = ReviewState.PASSED
                 self._assets.assets.update(asset)
@@ -294,7 +298,6 @@ class SheetService:
                             reply.seconds)
                 return asset
             asset.review = ReviewState.FAILED
-            asset.review_notes = "\n".join(problems)
             self._assets.assets.update(asset)
             tries.append(asset)
             logger.warning("sheet %s/%s: try %d failed %d checks:\n%s", target_id, view, attempt, len(problems),

@@ -31,6 +31,11 @@ ASPECTS = {**{v: "3:4" for v in BODY_VIEWS}, **{v: "1:1" for v in FACE_VIEWS}, "
 STYLE_LINE = ("Drawn in exactly the same illustration style as image 1, the same linework, shading and palette, "
               "showing a different subject.")
 SAME_LINE = "The same person as in image 1, with the same face, hair and clothes."
+# Text the code adds later must not be in the picture; writing that belongs to the place is set dressing.
+NO_OVERLAY_TEXT = ("No captions, labels, arrows, charts, diagram marks or large readable words laid on the picture; "
+                   "small writing that belongs to the place, such as a poster or a sign in the background, is fine")
+NO_TEXT_ON_SUBJECT = "No letters, digits, labels, logos or watermarks on the subject or laid on the picture"
+
 SAME_PERSON_LINE = ("The same person as in image 1, in the same pose and from the same angle, with the same face, "
                     "hair and body, now dressed as described.")
 
@@ -110,20 +115,20 @@ def sheet_brief(member: CastMember, view: str) -> Brief:
         description = (f"A single person, {angle}: {member.look}. Judge {shown}. Ignore pose, expression, exact "
                        "skin shade and how garments are worn.")
         whole = "The face and shoulders are in frame" if view in FACE_VIEWS else "The whole body from head to feet is in frame"
-        rules = [f"{whole} and the view is: {angle}",
-                 "Exactly one person on a plain single-colour ground (a soft floor shadow is fine): no scene, props or extra figures",
-                 "No letters, digits, labels, logos or watermarks anywhere, including on clothing and shoes",
+        fatal = ["Exactly one person on a plain single-colour ground (a soft floor shadow is fine): no scene, props or extra figures",
+                 NO_TEXT_ON_SUBJECT]
+        rules = [f"{whole} and the view is: {angle}", *fatal,
                  "Nothing warped or duplicated; suitable for school children"]
     else:
         description = (f"A single {member.id.replace('_', ' ')}: {member.look}. Judge the kind of object, its overall "
                        "shape, its main colours and materials; small details such as edge sharpness, reflections and "
                        "texture only shade the score.")
+        fatal = [NO_TEXT_ON_SUBJECT]
         rules = ["Exactly one object on a plain single-colour ground (a soft contact shadow is fine): no scene or extra objects",
-                 "The whole object is in frame",
-                 "No letters, digits, labels, logos or watermarks anywhere",
+                 "The whole object is in frame", *fatal,
                  "The object has no face, eyes, mouth or human expression; it looks like the real thing",
                  "Nothing warped or duplicated; suitable for school children"]
-    return Brief(description=description, rules=rules)
+    return Brief(description=description, rules=rules, fatal=fatal)
 
 
 def plate_brief(place: Place) -> Brief:
@@ -131,6 +136,6 @@ def plate_brief(place: Place) -> Brief:
     so cropping is never a rule; the scene and its light are what count."""
     return Brief(description=(f"An empty wide view of a place: {place.look}. Light roughly {place.lighting}. Judge "
                               "whether this is that place, with that kind of light, as a backdrop for later shots."),
-                 rules=["An empty place with no people, animals or characters in it",
-                        "No letters, digits, labels, signs or watermarks anywhere",
-                        "Nothing warped or broken; suitable for school children"])
+                 rules=["An empty place with no people, animals or characters in it", NO_OVERLAY_TEXT,
+                        "Nothing warped or broken; suitable for school children"],
+                 fatal=["An empty place with no people, animals or characters in it", NO_OVERLAY_TEXT])

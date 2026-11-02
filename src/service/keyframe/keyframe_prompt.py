@@ -1,6 +1,6 @@
 from src.schema.storyboard.storyboard_schema import CastKind, CastMember, Place, Shot, ShotKind, ShotSize
 from src.schema.image.image_check_schema import Brief, Correction
-from src.service.sheet.sheet_prompt import Style
+from src.service.sheet.sheet_prompt import NO_OVERLAY_TEXT, Style
 
 # A retry's prompt is the failed prompt plus a short correction written from the judge's findings.
 CORRECTION_WORDS = 60
@@ -75,7 +75,7 @@ def keyframe_brief(shot: Shot, place: Place, subjects: list[CastMember]) -> Brie
     for m in subjects:                                          # the judge finds each reference by its label
         rules.append(f"The {m.id.replace('_', ' ')} is the same one as in the image labelled '{ref_label('cast member', m.id)}': "
                      f"same {'face, hair and clothes' if m.kind == CastKind.PERSON else 'shape, colours and materials'}")
-    rules += ["No letters, digits, labels, arrows, charts or diagram marks anywhere",
-              "No face, eyes, mouth or human expression on anything that is not a person",
-              "Nothing warped, melted together or broken; suitable for school children"]
-    return Brief(description=description, rules=rules, moment=shot.start_state)
+    fatal = [NO_OVERLAY_TEXT, "No person or character beyond the ones the opening moment and the cast list name"]
+    rules += fatal + ["No face, eyes, mouth or human expression on anything that is not a person",
+                      "Nothing warped, melted together or broken; suitable for school children"]
+    return Brief(description=description, rules=rules, fatal=fatal, moment=shot.start_state)

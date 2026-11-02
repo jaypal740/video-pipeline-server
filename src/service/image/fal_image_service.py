@@ -29,12 +29,25 @@ class FalImageService:
 
     name = "fal"
 
-    def __init__(self, api_key: str | None) -> None:
+    def __init__(self, api_key: str | None, fallback_model: str | None = None) -> None:
         self._api_key = api_key
+        self._fallback = fallback_model
         self._client: fal_client.SyncClient | None = None
 
     def generate(self, model: str, prompt: str, refs: list[str], aspect: str, seed: int | None,
                  thinking: str = "medium") -> ImageReply:
+        """One image from `model`; when fal returns an error instead of an image (a content filter, an
+        outage), the same draw is made once on the fallback model so a run is never stuck on one provider."""
+        try:
+            return self._generate(model, prompt, refs, aspect, seed, thinking)
+        except fal_client.FalClientError as exc:
+            if not self._fallback or self._fallback == model:
+                raise
+            logger.warning("fal %s gave no image (%s); drawing on %s instead", model, str(exc)[:160], self._fallback)
+            return self._generate(self._fallback, prompt, refs, aspect, seed, thinking)
+
+    def _generate(self, model: str, prompt: str, refs: list[str], aspect: str, seed: int | None,
+                  thinking: str) -> ImageReply:
         spec = image_model(model)
         if spec.family == "gpt_image":
             width, height = GPT_IMAGE_SIZES[aspect]

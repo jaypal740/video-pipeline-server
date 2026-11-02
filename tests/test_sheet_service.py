@@ -75,6 +75,7 @@ class FakeVision:
         self.checks = 0
         self.seen = []
         self.corrections = []
+        self.fail_rule = None  # text of a rule the judge answers no to, with the score untouched
 
     def parse(self, model, system, user, output_type, effort):
         assert output_type is Correction, "the only text call is a keyframe retry's correction"
@@ -103,7 +104,8 @@ class FakeVision:
             return ProviderReply(output=Checklist(asked_for=[], score=0, score_reason="", answers=[]),
                                  model=model, input_tokens=6000, output_tokens=20, cost_usd=0.001)
         rules = [line.split(". ", 1)[1] for line in user.split("Rules:\n", 1)[1].splitlines() if line.strip()]
-        answers = [Answer(rule=r, ok=True, reason="") for r in rules]
+        answers = [Answer(rule=r, ok=not (self.fail_rule and self.fail_rule in r),
+                          reason="seen in the picture" if self.fail_rule and self.fail_rule in r else "") for r in rules]
         if self.extra_answer:
             answers.append(Answer(rule="a rule the judge made up", ok=False, reason="ignored"))
         hit = self.fail_when is not None and self.fail_when[0] in user and self.failed_when < self.fail_when[1]

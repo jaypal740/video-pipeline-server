@@ -36,7 +36,11 @@ thing with one clear mistake; 3 or less is the wrong thing. Say in one sentence 
 
 Then answer each rule true or false, with a one-sentence reason for every false that says what you actually \
 see. Judge only what is visible; do not guess at intent. The description and the opening moment are what \
-was asked for: a rule never forbids something they ask for."""
+was asked for: a rule never forbids something they ask for.
+
+Writing that belongs to the place, such as a poster, a sign or a small label in the background, is set \
+dressing and not a fault. Captions, labels, arrows, charts, diagram marks or a large readable word laid on \
+the picture are a fault, and so is a person the moment does not ask for: count both against the score."""
 
 
 class ImageCheckService:
@@ -77,8 +81,13 @@ class ImageCheckService:
                 checklist.score, checklist.score_reason = self._settings.image_pass_score, "not given by the judge"
         return checklist, call
 
-    def problems(self, checklist: Checklist) -> list[str]:
-        return checklist.problems(self._settings.image_pass_score)
+    def problems(self, checklist: Checklist, brief: Brief) -> list[str]:
+        """What fails the try."""
+        return checklist.problems(self._settings.image_pass_score, brief.fatal)
+
+    def notes(self, checklist: Checklist) -> list[str]:
+        """Everything found wrong, failing or not."""
+        return checklist.notes(self._settings.image_pass_score)
 
     @staticmethod
     def _fill_request(user: str, brief: Brief, gaps: list[str]) -> str:
