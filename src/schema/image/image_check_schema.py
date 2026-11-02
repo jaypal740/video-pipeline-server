@@ -50,6 +50,12 @@ class Checklist(BaseModel):
         return found
 
 
+class Correction(BaseModel):
+    """A short addition to a failed keyframe's prompt, written from the judge's findings for the retry."""
+
+    text: str
+
+
 class Fill(BaseModel):
     """A follow-up answer holding only the parts the judge's first answer left out; the rest stays empty."""
 

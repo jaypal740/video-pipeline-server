@@ -116,6 +116,22 @@ def test_a_shot_that_fails_every_draw_uses_its_best_try_above_the_floor(stage, c
     vision.fail_score = 4
 
 
+def test_a_retry_adds_a_correction_written_from_the_judges_findings(stage, container):
+    service, sheets, fal, vision = stage
+    run = ready_run(container, sheets)
+    vision.fail_when = ("operator", 1)                           # s03 fails once, then passes
+    made = service.run(run.id)
+    first, second = sorted(container.asset_repository().assets.list(run_id=run.id, stage=StageName.KEYFRAMES,
+                                                                     target_id="s03"), key=lambda a: a.params["try"])
+    assert len(vision.corrections) == 1 and "the waistcoat is blue" in vision.corrections[0]
+    assert "sails full" in vision.corrections[0] and first.prompt in vision.corrections[0]   # moment + failed prompt
+    assert first.params["correction"] is None and second.params["correction"] == "Show the operator in a red waistcoat."
+    assert second.prompt == f"{first.prompt} Show the operator in a red waistcoat." and made["s03"].id == second.id
+    drawn = len(fal.calls)
+    again = service.run(ready_run(container, sheets).id)        # the corrected retry is found by its seed
+    assert len(fal.calls) == drawn and again["s03"].id == second.id
+
+
 def test_a_thing_in_a_sung_shot_uses_its_front_view():
     sung = Shot.model_construct(kind=ShotKind.SUNG, size=ShotSize.MEDIUM_CLOSE)
     person = CastMember(id="host", kind=CastKind.PERSON, look="a boy", size="a teen", scale=Scale.HUMAN)

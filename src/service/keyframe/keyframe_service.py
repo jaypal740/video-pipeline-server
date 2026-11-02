@@ -12,14 +12,15 @@ from src.schema.asset.asset_schema import Asset, ReviewState
 from src.schema.asset.cost_entry_schema import CostEntry
 from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
-from src.schema.image.image_check_schema import Brief, Checklist
+from src.schema.image.image_check_schema import Brief, Checklist, Correction
 from src.schema.run.stage_state_schema import StageState
 from src.schema.storyboard.storyboard_schema import CastMember, Place, Shot, ShotKind, Storyboard
 from src.service.image.fal_image_service import RESOLUTION, FalImageService, ImageReply
 from src.service.image.image_check_service import ImageCheckService
 from src.service.lesson.lesson_rules import band_rules
-from src.service.llm.llm_service import LabelledImage, LlmCall
-from src.service.keyframe.keyframe_prompt import keyframe_brief, keyframe_prompt, view_for, ref_label
+from src.service.llm.llm_service import LabelledImage, LlmCall, LlmError, LlmService
+from src.service.keyframe.keyframe_prompt import (CORRECTION, check_correction, correction_request, keyframe_brief,
+                                                  keyframe_prompt, view_for, ref_label)
 from src.service.sheet.sheet_prompt import PLATE, Style
 from src.service.image.image_prices import image_model
 from src.service.sheet.sheet_service import URL_SECONDS, USABLE, SheetService
@@ -41,6 +42,9 @@ class Attempt(BaseModel):
     attempt: int
     seed: int
     thinking: str
+    prompt: str
+    correction: str | None = None
+    fix: LlmCall | None = None
     score: int
     asked_for: list[dict]
     cache_key: str
@@ -55,12 +59,14 @@ class KeyframeService:
     writes rows. A shot whose sheets are not usable is left blocked until a person settles them."""
 
     def __init__(self, run_repository: RunRepository, asset_repository: AssetRepository, storage: Storage,
-                 images: FalImageService, check: ImageCheckService, sheets: SheetService, settings: Settings) -> None:
+                 images: FalImageService, check: ImageCheckService, sheets: SheetService, llm: LlmService,
+                 settings: Settings) -> None:
         self._runs = run_repository
         self._assets = asset_repository
         self._storage = storage
         self._images = images
         self._check = check
+        self._llm = llm
         self._sheets = sheets
         self._settings = settings
 
@@ -214,17 +220,19 @@ class KeyframeService:
                 made[shot.id] = usable
             elif not left:                                      # every seed tried, none good enough
                 self._keep(shot.id, tried)
-            else:
-                todo.append((shot, prompt, refs, brief, left))
+            else:                                               # the last try drawn so far says what to correct
+                last = max(tried, key=lambda c: c.params.get("try", 1), default=None)
+                findings = (last.review_notes or "").splitlines() if last is not None else []
+                todo.append((shot, prompt, refs, brief, left, findings))
         if not todo:
             return made
         self._guard_spend(run_id, model, len(todo))
-        ref_urls = {r.id: self._url(r) for _, _, refs, _, _ in todo for r in refs}
-        ref_bytes = {r.id: self._storage.get(r.path) for _, _, refs, _, _ in todo for r in refs}
+        ref_urls = {r.id: self._url(r) for _, _, refs, *_ in todo for r in refs}
+        ref_bytes = {r.id: self._storage.get(r.path) for _, _, refs, *_ in todo for r in refs}
         with ThreadPoolExecutor(max_workers=self._settings.image_workers) as pool:
             futures = {pool.submit(self._attempts, model, ref_urls, ref_bytes, *job): job for job in todo}
             for future in as_completed(futures):               # stored the moment each shot finishes
-                shot, prompt, refs, _, _ = futures[future]
+                shot, prompt, refs, *_ = futures[future]
                 try:
                     tries = future.result()
                 except Exception as exc:                        # one shot's error never loses the others
@@ -234,7 +242,7 @@ class KeyframeService:
                 if not tries:                                   # skipped: the stop-loss had fired
                     self._errors[shot.id] = self._stopped
                     continue
-                kept = self._store_attempts(run_id, shot, prompt, refs, tries)
+                kept = self._store_attempts(run_id, shot, refs, tries)
                 if kept is not None:
                     made[shot.id] = kept
         if self._stopped:
@@ -257,9 +265,10 @@ class KeyframeService:
                              "or reduce the run")
 
     def _attempts(self, model: str, ref_urls: dict, ref_bytes: dict, shot: Shot, prompt: str, refs: list[Asset],
-                  brief: Brief, seeds: list[tuple[int, int, str, str]]) -> list[Attempt]:
-        """Network only: draw, check, retry on a new seed. No database access in here. The workers keep the
-        stop-loss count themselves, so no draw starts once it has fired, whatever the timing."""
+                  brief: Brief, seeds: list[tuple[int, int, str, str]], findings: list[str]) -> list[Attempt]:
+        """Network only: draw, check, retry on a new seed with a correction written from the last try's
+        findings. No database access in here. The workers keep the stop-loss count themselves, so no draw
+        starts once it has fired, whatever the timing."""
         if self._stopped:
             return []
         urls = [ref_urls[r.id] for r in refs]
@@ -267,10 +276,13 @@ class KeyframeService:
                     for (kind, name), r in zip([('place', shot.place), *(('cast member', s) for s in shot.subjects)], refs)]
         tries = []
         for attempt, seed, thinking, cache_key in seeds:
-            reply = self._images.generate(model, prompt, urls, ASPECT, seed=seed, thinking=thinking)
+            correction, fix = self._correction(shot, prompt, brief, findings) if findings else (None, None)
+            drawn = f"{prompt} {correction}" if correction else prompt
+            reply = self._images.generate(model, drawn, urls, ASPECT, seed=seed, thinking=thinking)
             checklist, call = self._check.check(reply.data, labelled, brief)
-            problems = self._check.problems(checklist)
-            tries.append(Attempt(attempt=attempt, seed=seed, thinking=thinking, score=checklist.score,
+            problems = findings = self._check.problems(checklist)
+            tries.append(Attempt(attempt=attempt, seed=seed, thinking=thinking, prompt=drawn, correction=correction,
+                                 fix=fix, score=checklist.score,
                                  asked_for=[a.model_dump() for a in checklist.asked_for],
                                  cache_key=cache_key, reply=reply,
                                  problems=problems, check=call))
@@ -285,6 +297,19 @@ class KeyframeService:
         self._count(passed=False)
         return tries
 
+    def _correction(self, shot: Shot, prompt: str, brief: Brief, findings: list[str]) -> tuple[str | None, LlmCall | None]:
+        """A short correction for the retry, from the failed prompt, the opening moment and the judge's
+        findings; when none can be written the retry is drawn from the plain prompt."""
+        try:
+            fix, call = self._llm.parse(self._settings.image_check_model, CORRECTION,
+                                        correction_request(prompt, brief.moment or "", findings), Correction,
+                                        check=check_correction, effort="low")
+        except LlmError as exc:
+            logger.warning("keyframe %s: no correction, retrying the plain prompt: %s", shot.id, exc)
+            return None, exc.call
+        logger.info("keyframe %s: retry corrected: %s", shot.id, fix.text)
+        return fix.text, call
+
     def _count(self, passed: bool) -> None:
         """The stop-loss: after the first STOP_LOSS_AFTER finished shots, too many failures pause the stage."""
         with self._lock:
@@ -295,8 +320,7 @@ class KeyframeService:
                 self._stopped = (f"stopped: {self._failed} of the first {self._finished} shots failed every draw; "
                                  "fix the cause before drawing more")
 
-    def _store_attempts(self, run_id: str, shot: Shot, prompt: str, refs: list[Asset],
-                        tries: list[Attempt]) -> Asset | None:
+    def _store_attempts(self, run_id: str, shot: Shot, refs: list[Asset], tries: list[Attempt]) -> Asset | None:
         stored = []
         for t in tries:
             asset_id = new_id()
@@ -306,14 +330,15 @@ class KeyframeService:
             asset = self._assets.assets.add(Asset(
                 id=asset_id, run_id=run_id, stage=StageName.KEYFRAMES, kind=AssetKind.IMAGE, path=path,
                 sha256=hashlib.sha256(t.reply.data).hexdigest(), target_id=shot.id, cache_key=t.cache_key,
-                provider=self._images.name, model=t.reply.model, seed=t.reply.seed, prompt=prompt,
+                provider=self._images.name, model=t.reply.model, seed=t.reply.seed, prompt=t.prompt,
                 params={"view": "keyframe", "try": t.attempt, "aspect": ASPECT, "resolution": RESOLUTION,
                         "thinking": t.thinking, "refs": [r.id for r in refs], "seconds": t.reply.seconds,
-                        "score": t.score, "asked_for": t.asked_for},
+                        "score": t.score, "asked_for": t.asked_for, "correction": t.correction},
                 cost_usd=t.reply.cost_usd, review=review, review_notes="\n".join(t.problems) or None))
             self._cost(run_id, self._images.name, t.reply.model, t.reply.cost_usd, shot.id, 1, "image")
-            self._cost(run_id, t.check.provider, t.check.model, t.check.cost_usd, shot.id,
-                       t.check.input_tokens + t.check.output_tokens, "tokens")
+            for call in (t.check, t.fix) if t.fix is not None else (t.check,):
+                self._cost(run_id, call.provider, call.model, call.cost_usd, shot.id,
+                           call.input_tokens + call.output_tokens, "tokens")
             stored.append(asset)
         return self._keep(shot.id, stored)
 
@@ -365,7 +390,8 @@ class KeyframeService:
     def _tries(self, model: str, prompt: str, refs: list[Asset], base: int) -> list[tuple[int, int, str, str]]:
         """A shot's tries in order: try number, seed, thinking level (the last try thinks harder) and cache key.
         Shared by the cache lookup and the drawing so they always agree; a try keeps its number even when
-        it is the only one left to draw."""
+        it is the only one left to draw. The key uses the shot's own prompt, not a retry's correction, so a
+        corrected retry is still found and never drawn twice."""
         max_tries = self._settings.image_max_tries
         return [(i + 1, base + i, "high" if i == max_tries - 1 else "medium",
                  self._cache_key(model, prompt, refs, base + i, "high" if i == max_tries - 1 else "medium"))

@@ -1,6 +1,16 @@
 from src.schema.storyboard.storyboard_schema import CastKind, CastMember, Place, Shot, ShotKind, ShotSize
-from src.schema.image.image_check_schema import Brief
+from src.schema.image.image_check_schema import Brief, Correction
 from src.service.sheet.sheet_prompt import Style
+
+# A retry's prompt is the failed prompt plus a short correction written from the judge's findings.
+CORRECTION_WORDS = 60
+CORRECTION = """You turn a judge's findings about a generated picture into a short correction for the image \
+model that drew it, at most 60 words. You are given the prompt the picture was drawn from, the opening moment \
+it must show and what the judge found wrong. Say what the picture should show instead, in positive words that \
+move it toward the opening moment: never write "no", "not", "without" or "remove", because the image model \
+draws what is named. Fix only what the findings say is wrong. The opening moment and the place describe the \
+world the picture is set in, even when it differs from everyday experience (a black sky in full sunlight \
+where there is no air): when a finding asks for something they do not, keep what they ask for."""
 
 # Which sheet view a subject is drawn from: the front for wide framings, three-quarter when closer.
 _FRONT_SIZES = {ShotSize.WIDE, ShotSize.MEDIUM_WIDE}
@@ -31,6 +41,20 @@ def keyframe_prompt(style: Style, shot: Shot, place: Place, subjects: list[CastM
     lines.append(shot.start_state.rstrip(".") + ".")
     lines.append(f"The design features {style.features}. Keep every design exactly as in the references.")
     return " ".join(lines)
+
+
+def correction_request(prompt: str, moment: str, findings: list[str]) -> str:
+    """What the correction writer reads: the failed prompt (the place and its light), the opening moment
+    and what the judge found wrong."""
+    return (f"The image model was asked for:\n{prompt}\n\nThe opening moment it must show:\n{moment}\n\n"
+            "What the judge found wrong:\n" + "\n".join(f"- {f}" for f in findings))
+
+
+def check_correction(correction: Correction) -> list[str]:
+    words = correction.text.lower().replace(",", " ").replace(".", " ").split()
+    problems = [f"{len(words)} words, at most {CORRECTION_WORDS}"] if len(words) > CORRECTION_WORDS else []
+    negative = [w for w in ("no", "not", "without", "remove") if w in words]
+    return problems + ([f"uses {negative}; say what should be seen instead"] if negative else [])
 
 
 def ref_label(kind: str, ref_id: str) -> str:

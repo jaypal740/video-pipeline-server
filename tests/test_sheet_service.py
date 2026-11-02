@@ -7,7 +7,7 @@ from dependency_injector import providers
 from src.core.container import Container
 from src.schema.asset.asset_schema import ReviewState
 from src.schema.enums import StageName, StageStatus
-from src.schema.image.image_check_schema import Answer, AskedFor, Checklist, Fill
+from src.schema.image.image_check_schema import Answer, AskedFor, Checklist, Correction, Fill
 from src.schema.lesson.lesson_schema import GradeBand, VideoType
 from src.schema.run.run_schema import Run
 from src.schema.run.stage_state_schema import StageState
@@ -74,9 +74,13 @@ class FakeVision:
         self.drop = 0          # this many replies leave out the score and every rule answer
         self.checks = 0
         self.seen = []
+        self.corrections = []
 
-    def parse(self, *a, **k):
-        raise AssertionError("no text calls expected")
+    def parse(self, model, system, user, output_type, effort):
+        assert output_type is Correction, "the only text call is a keyframe retry's correction"
+        self.corrections.append(user)
+        return ProviderReply(output=Correction(text="Show the operator in a red waistcoat."), model=model,
+                             input_tokens=500, output_tokens=30, cost_usd=0.0005)
 
     def inspect(self, model, system, user, images, output_type):
         self.seen.append((user, [i.label for i in images]))

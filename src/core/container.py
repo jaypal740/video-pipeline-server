@@ -110,5 +110,6 @@ class Container(containers.DeclarativeContainer):
         images=fal_image_service,
         check=image_check_service,
         sheets=sheet_service,
+        llm=llm_service,
         settings=settings,
     )
