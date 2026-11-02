@@ -65,7 +65,6 @@ def test_keyframes_are_drawn_from_the_plate_and_the_right_sheet_views(stage, con
     assert made["s04"].id == made["s01"].id
     state = container.run_repository().stage(run.id, StageName.KEYFRAMES)
     assert set(state.output["end_keyframes"]) == {"s01", "s03", "s04"}                  # a sung shot has no ending
-    assets = {a.target_id: a for a in container.asset_repository().assets.list(run_id=run.id, stage=StageName.VISUAL_IDENTITY)}
     by_id = {a.id: a for a in container.asset_repository().assets.list(run_id=run.id)}
     s01_refs = [by_id[r] for r in made["s01"].params["refs"]]
     assert s01_refs[0].params["view"] == "plate" and s01_refs[0].target_id == "sea"

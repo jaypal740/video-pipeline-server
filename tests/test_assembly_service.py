@@ -17,7 +17,7 @@ from tests.test_keyframe_service import shot
 from tests.test_sheet_service import BOARD
 
 FPS = 24
-RED, BLUE, YELLOW, GREEN, CYAN = (255, 0, 0), (0, 0, 255), (255, 255, 0), (0, 255, 0), (0, 255, 255)
+RED, BLUE, YELLOW, CYAN = (255, 0, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255)
 
 
 def ff(*args) -> None:

@@ -12,7 +12,7 @@ from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.image.image_check_schema import Brief
 from src.schema.lesson.lesson_schema import GradeBand
 from src.schema.run.stage_state_schema import StageState
-from src.schema.storyboard.storyboard_schema import CastKind, CastMember, Place, Storyboard
+from src.schema.storyboard.storyboard_schema import CastMember, Place, Storyboard
 from src.service.image.fal_image_service import RESOLUTION, FalImageService
 from src.service.image.image_check_service import ImageCheckService
 from src.service.lesson.lesson_rules import band_rules

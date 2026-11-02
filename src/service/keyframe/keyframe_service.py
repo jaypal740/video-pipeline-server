@@ -13,7 +13,7 @@ from src.schema.asset.asset_schema import Asset, ReviewState
 from src.schema.asset.cost_entry_schema import CostEntry
 from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
-from src.schema.image.image_check_schema import Brief, Checklist, Correction
+from src.schema.image.image_check_schema import Brief, Correction
 from src.schema.run.stage_state_schema import StageState
 from src.schema.storyboard.storyboard_schema import (CameraMove, CastMember, Continuity, Moves, Place, Shot,
                                                      ShotKind, Storyboard)

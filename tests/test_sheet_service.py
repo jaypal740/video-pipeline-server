@@ -8,7 +8,7 @@ from src.core.container import Container
 from src.schema.asset.asset_schema import ReviewState
 from src.schema.enums import StageName, StageStatus
 from src.schema.image.image_check_schema import Answer, AskedFor, Checklist, Correction, Fill
-from src.schema.lesson.lesson_schema import GradeBand, VideoType
+from src.schema.lesson.lesson_schema import GradeBand
 from src.schema.run.run_schema import Run
 from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_schema import Song
