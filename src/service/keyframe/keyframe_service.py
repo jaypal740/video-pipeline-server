@@ -107,7 +107,7 @@ class KeyframeService:
     first opening is drawn from start_state with the place plate and the subjects' sheets attached; each
     later opening is drawn from the picture the shot before ended on, so the cut joins up; a shot that
     changes also gets its ending, drawn from its opening. Workers draw and check over the network; only the main thread
-    writes rows. A shot whose sheets are not usable is left blocked until a person settles them."""
+    writes rows. A shot whose sheets are not usable is blocked, and a blocked shot fails the stage."""
 
     def __init__(self, run_repository: RunRepository, asset_repository: AssetRepository, storage: Storage,
                  images: FalImageService, check: ImageCheckService, sheets: SheetService, llm: LlmService,
@@ -187,7 +187,8 @@ class KeyframeService:
 
     def recheck(self, run_id: str) -> dict[str, Asset]:
         """Judge every keyframe of this run that did not pass again, with the current brief; no image is drawn.
-        The stage then takes the best passed try of each shot, or waits for a person as before."""
+        The stage then takes the best passed try of each shot, else its best try at or above the floor score;
+        a shot with neither fails, as on a fresh run."""
         board = storyboard_of(self._runs, run_id)
         state = self._runs.stage(run_id, StageName.KEYFRAMES)
         if state is None or not state.output:

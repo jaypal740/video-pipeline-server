@@ -49,8 +49,9 @@ class Settings(BaseSettings):
     image_pass_score: int = Field(default=6, validation_alias="PIPELINE_IMAGE_PASS_SCORE")
     # A keyframe whose tries all failed uses its best-scoring try at or above this; below it, the shot fails.
     image_floor_score: int = Field(default=5, validation_alias="PIPELINE_IMAGE_FLOOR_SCORE")
-    # Draws per image before it waits for a person (the first draw plus retries), and the stop-loss: a stage
-    # pauses when more than this share of its first STOP_LOSS_AFTER finished images failed every draw.
+    # Draws per image (the first draw plus retries); when none passes, the best try at or above the floor is
+    # used, and below it the image fails. The stop-loss: a stage stops drawing when more than this share of
+    # its first STOP_LOSS_AFTER finished images failed every draw.
     image_max_tries: int = Field(default=2, validation_alias="PIPELINE_IMAGE_MAX_TRIES")
     image_stop_loss: float = Field(default=0.5, validation_alias="PIPELINE_IMAGE_STOP_LOSS")
     storage: str = Field(default="local", validation_alias="PIPELINE_STORAGE")
