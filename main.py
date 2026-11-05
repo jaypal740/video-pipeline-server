@@ -76,10 +76,14 @@ def key_revoke(prefix: str) -> None:
 def song_add(
     name: str = typer.Option(..., "--name", help="Unique song name, e.g. antibiotic-resistance."),
     audio: Path = typer.Option(..., "--audio", exists=True, dir_okay=False, help="Song audio file."),
-    lyrics: Path = typer.Option(..., "--lyrics", exists=True, dir_okay=False, help="Lyrics or narration text."),
+    lyrics: Path | None = typer.Option(None, "--lyrics", exists=True, dir_okay=False, help="Lyrics or narration text."),
+    jamwise: Path | None = typer.Option(None, "--jamwise", exists=True, dir_okay=False,
+                                        help="JamWise job export; its lyrics and timing are used instead of --lyrics."),
 ) -> None:
     """Register a song. Its audio is copied into the asset folder."""
-    song = container.song_service().add(name, audio, lyrics.read_text())
+    if (lyrics is None) == (jamwise is None):
+        raise typer.BadParameter("give either --lyrics or --jamwise")
+    song = container.song_service().add(name, audio, lyrics.read_text() if lyrics else None, jamwise)
     typer.echo(song.id)
 
 

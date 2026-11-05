@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,7 @@ from src.schema.song.song_analysis_schema import SongAnalysis
 from src.schema.song.song_schema import Song, SongStatus
 from src.service.intake.intake_alignment import REJECT_BELOW, lyric_lines, song_confidence, spoken_tokens, timed_words
 from src.service.intake.intake_beats import beat_strength, bpm_of, onset_envelope
+from src.service.intake.intake_jamwise import JAMWISE_FILE, jamwise_lines, read_export
 from src.service.intake.intake_lyrics import parse_lyrics
 from src.service.local.beat_service import SAMPLE_RATE as BEAT_RATE
 from src.service.local.beat_service import BeatService
@@ -46,16 +48,20 @@ class IntakeService:
         self._beats = beats
 
     def analyse(self, audio: Path, lyrics_text: str, force: bool = False,
-                expires_at: datetime | None = None) -> SongAnalysis:
+                expires_at: datetime | None = None, timing: list[dict] | None = None) -> SongAnalysis:
         """Analyse any audio + lyrics pair, a library song's or a job's. expires_at None keeps the
-        analysis forever; a shared analysis keeps the longest retention any of its users asked for."""
+        analysis forever; a shared analysis keeps the longest retention any of its users asked for.
+        timing: JamWise's lineTiming, used instead of aligning the words ourselves."""
         parsed = parse_lyrics(lyrics_text)
         if not parsed:
             raise ValueError("The lyrics have no lines to align")
         lyrics, sections = [line for _, line in parsed], [section for section, _ in parsed]
         audio_sha = sha256_file(audio)
         lyrics_sha = hashlib.sha256("\n".join(f"{s or ''}|{l}" for s, l in parsed).encode()).hexdigest()
-        key = hashlib.sha256(f"{ANALYZER_VERSION}|{audio_sha}|{lyrics_sha}".encode()).hexdigest()
+        key = f"{ANALYZER_VERSION}|{audio_sha}|{lyrics_sha}"
+        if timing is not None:
+            key += "|" + hashlib.sha256(json.dumps(timing, sort_keys=True).encode()).hexdigest()
+        key = hashlib.sha256(key.encode()).hexdigest()
 
         cached = self._songs.find_analysis(key)
         if cached is not None and not force:
@@ -64,7 +70,7 @@ class IntakeService:
                 cached.expires_at = keep
                 cached = self._songs.analyses.update(cached)
             return cached
-        analysis = self._analyse(audio, lyrics, sections, key, audio_sha, lyrics_sha)
+        analysis = self._analyse(audio, lyrics, sections, key, audio_sha, lyrics_sha, timing)
         if cached is None:
             analysis.expires_at = expires_at
             return self._songs.analyses.add(analysis)
@@ -78,7 +84,9 @@ class IntakeService:
         song.status, song.reason = SongStatus.ANALYSING, None
         song = self._songs.songs.update(song)
         try:
-            analysis = self.analyse(Path(song.audio_path), song.lyrics, force=force)
+            export = Path(song.audio_path).parent / JAMWISE_FILE
+            timing = read_export(export)["lineTiming"] if export.is_file() else None
+            analysis = self.analyse(Path(song.audio_path), song.lyrics, force=force, timing=timing)
         except Exception as exc:
             song.status, song.reason = SongStatus.FAILED, str(exc) or type(exc).__name__
             self._songs.songs.update(song)
@@ -101,11 +109,14 @@ class IntakeService:
         return song
 
     def _analyse(self, audio: Path, lyrics: list[str], sections: list[str | None], key: str, audio_sha: str,
-                 lyrics_sha: str) -> SongAnalysis:
+                 lyrics_sha: str, timing: list[dict] | None) -> SongAnalysis:
         speech = self._ffmpeg.decode(audio, ALIGN_RATE)
-        tokens, owners = spoken_tokens(lyrics)
-        words = timed_words(lyrics, owners, self._aligner.align(speech, tokens))
-        lines = lyric_lines(lyrics, words)
+        if timing is None:
+            tokens, owners = spoken_tokens(lyrics)
+            words = timed_words(lyrics, owners, self._aligner.align(speech, tokens))
+            lines = lyric_lines(lyrics, words)
+        else:
+            words, lines = jamwise_lines(timing, lyrics, len(speech) / ALIGN_RATE)
         for line, section in zip(lines, sections):
             line.section = section
         confidence = song_confidence(lines)
@@ -121,5 +132,5 @@ class IntakeService:
                                           f"{REJECT_BELOW:.2f}: check that this is the right audio for this script"),
             words=words, lines=lines, bpm=bpm, beats=beats, downbeats=downbeats,
             beat_strength=beat_strength(onset_envelope(speech, ALIGN_RATE), bpm),
-            tool_versions={"analyzer": ANALYZER_VERSION, "aligner": self._aligner.version,
+            tool_versions={"analyzer": ANALYZER_VERSION, "aligner": "jamwise" if timing else self._aligner.version,
                            "beats": self._beats.version, "confidence": confidence})
