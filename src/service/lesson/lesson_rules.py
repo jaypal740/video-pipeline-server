@@ -1,10 +1,16 @@
+import re
 import tomllib
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from src.schema.lesson.lesson_schema import BandRules, FormatRules, GradeBand, LessonDraft, LineTag, VideoType
 from src.schema.song.song_analysis_schema import LyricLine
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "templates"
+# A line this close to an earlier one of its section, by words, is that line sung again.
+REPEAT_SIMILAR = 0.8
+_AD_LIB = re.compile(r"\([^)]*\)")
+_WORD = re.compile(r"[a-z0-9']+")
 
 
 def band_rules(band: GradeBand) -> BandRules:
@@ -39,18 +45,25 @@ def face_limit(band: GradeBand, video_type: VideoType, line_count: int) -> int:
     return int(share * line_count)
 
 
+def _words(text: str) -> list[str]:
+    return _WORD.findall(_AD_LIB.sub(" ", text.lower()))
+
+
 def repeats(lines: list[LyricLine]) -> dict[int, int]:
-    """Lines that repeat an earlier line of the same section word for word (a chorus sung again),
-    mapped to that earlier line's index. Untagged lines never count as repeats."""
-    first, found = {}, {}
+    """Lines that repeat an earlier line of the same section (a chorus sung again, ad-libs and punctuation
+    aside), mapped to that earlier line's index. Untagged and unclear lines never count as repeats."""
+    first: list[LyricLine] = []
+    found = {}
     for line in lines:
-        if line.section is None:
+        if line.section is None or line.unclear:
             continue
-        key = (line.section, line.text.lower())
-        if key in first:
-            found[line.index] = first[key]
+        words = _words(line.text)
+        score, match = max(((SequenceMatcher(None, words, _words(f.text)).ratio(), f.index)
+                            for f in first if f.section == line.section), key=lambda m: m[0], default=(0.0, None))
+        if score >= REPEAT_SIMILAR:
+            found[line.index] = match
         else:
-            first[key] = line.index
+            first.append(line)
     return found
 
 
