@@ -1,6 +1,7 @@
 import pytest
 
-from src.schema.lesson.lesson_schema import GradeBand, KeyTerm, LessonDraft, LessonLine, LineTag, VideoType
+from src.schema.lesson.lesson_schema import (GradeBand, KeyTerm, LessonDraft, LessonLine, LessonSequence, LineTag,
+                                             VideoType)
 from src.schema.song.song_analysis_schema import LyricLine
 from src.service.lesson.lesson_prompt import user_prompt
 from src.service.lesson.lesson_rules import (allowed_types, band_for, band_rules, face_limit, format_rules, problems,
@@ -16,7 +17,8 @@ def draft(**changes) -> LessonDraft:
                 lines=[LessonLine(index=0, teaches="t", show="s", tag=LineTag.ILLUSTRATE),
                        LessonLine(index=1, teaches="t", show="s", tag=LineTag.NUMBER, number_text="1858"),
                        LessonLine(index=2, teaches="t", show="s", tag=LineTag.UNCLEAR),
-                       LessonLine(index=3, teaches="t", show="s", tag=LineTag.FACE_TO_CAMERA)])
+                       LessonLine(index=3, teaches="t", show="s", tag=LineTag.FACE_TO_CAMERA)],
+                sequences=[LessonSequence(first_line=0, last_line=3, topic="t", place="p", change="c")])
     return LessonDraft(**{**base, **changes})
 
 
@@ -81,9 +83,10 @@ CHORUS = [LyricLine(index=i, text=t, start=i, end=i + 1, confidence=0.9, section
 def test_a_chorus_sung_again_must_look_the_same():
     assert repeats(CHORUS) == {2: 0}                               # untagged repeats don't count
     lines = [LessonLine(index=i, teaches="t", show="s", tag=LineTag.ILLUSTRATE) for i in range(5)]
-    lesson = draft(lines=lines)
+    whole = [LessonSequence(first_line=0, last_line=4, topic="t", place="p", change="c")]
+    lesson = draft(lines=lines, sequences=whole)
     assert problems(lesson, CHORUS, GradeBand.G3_5, allowed_types(GradeBand.G3_5, None)) == []
     lines[2].show = "a different scene"
-    found = problems(draft(lines=lines), CHORUS, GradeBand.G3_5, allowed_types(GradeBand.G3_5, None))
+    found = problems(draft(lines=lines, sequences=whole), CHORUS, GradeBand.G3_5, allowed_types(GradeBand.G3_5, None))
     assert found == ["line 2 repeats line 0; give it the same teaches, show and tag"]
     assert "2. [2.0-3.0s] [chorus] [repeat of 0] sing it!" in user_prompt(CHORUS, GradeBand.G3_5, [VideoType.CONCEPT], None)

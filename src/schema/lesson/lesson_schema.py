@@ -81,6 +81,18 @@ class LessonLine(BaseModel):
     number_text: str | None = None
 
 
+class LessonSequence(BaseModel):
+    """A run of lines on one topic, shown in one place. change: what visibly changes from its first shot
+    to its last; terms: the key terms its lines name and its pictures show."""
+
+    first_line: int
+    last_line: int
+    topic: str
+    place: str
+    change: str
+    terms: list[str] = Field(default_factory=list)
+
+
 class LessonDraft(BaseModel):
     """What the model writes."""
 
@@ -92,6 +104,7 @@ class LessonDraft(BaseModel):
     key_terms: list[KeyTerm]
     must_not_teach: list[str]
     lines: list[LessonLine]
+    sequences: list[LessonSequence] = Field(default_factory=list)
 
 
 class LessonPlan(LessonDraft):

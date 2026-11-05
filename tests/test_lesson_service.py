@@ -17,7 +17,8 @@ def draft(video_type="concept", tags=("illustrate", "number", "illustrate")):
     return {"topic": "Bacteria", "subject": "Science", "summary": "S.", "video_type": video_type,
             "type_reason": "r", "key_terms": [{"term": "colony", "definition": "a group"}], "must_not_teach": [],
             "lines": [{"index": i, "teaches": "t", "show": "s", "tag": tag,
-                       "number_text": "1858" if tag == "number" else None} for i, tag in enumerate(tags)]}
+                       "number_text": "1858" if tag == "number" else None} for i, tag in enumerate(tags)],
+            "sequences": [{"first_line": 0, "last_line": len(tags) - 1, "topic": "t", "place": "p", "change": "c"}]}
 
 
 class FakeClaude:
