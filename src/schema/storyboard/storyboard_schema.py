@@ -165,7 +165,7 @@ class Camera(BaseModel):
 
 class Slot(BaseModel):
     """A shot's place in time, cut by code from the lyric timings and beats. repeat_of: the slot whose
-    shot this one copies (a chorus sung again)."""
+    shot this one copies (a chorus sung again); sequence: the lesson sequence it belongs to."""
 
     id: str
     start: float
@@ -174,6 +174,7 @@ class Slot(BaseModel):
     kind: ShotKind
     number_text: str | None = None
     repeat_of: str | None = None
+    sequence: int = 0
 
 
 class ShotDraft(BaseModel):
@@ -206,8 +207,27 @@ class StoryboardDraft(BaseModel):
     shots: list[ShotDraft]
 
 
+class SequencePlaces(BaseModel):
+    """Where one lesson sequence is shown: its home place, and optionally a zoom place that shows the same
+    topic at another scale (the air up close above a hilltop, the core's atoms inside the Sun)."""
+
+    home: str
+    zoom: str | None = None
+
+
+class BoardHeader(BaseModel):
+    """What the model writes first, for the whole video. sequence_places: one entry per lesson sequence,
+    in order; every picture shot of a sequence is in its home or zoom place."""
+
+    shape: str
+    cast: list[CastMember]
+    places: list[Place]
+    motifs: list[Motif]
+    sequence_places: list[SequencePlaces]
+
+
 class ShotPatch(BaseModel):
-    """A re-ask's answer: replacements for the named shots only."""
+    """One sequence's shots."""
 
     shots: list[ShotDraft]
 

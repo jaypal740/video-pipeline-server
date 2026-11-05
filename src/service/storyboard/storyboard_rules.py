@@ -1,10 +1,11 @@
 import re
 import tomllib
 
-from src.schema.lesson.lesson_schema import BandRules, FormatRules, GradeBand, VideoType
-from src.schema.storyboard.storyboard_schema import (Angle, CameraMove, CastKind, CastMember, Continuity, Direction,
-                                                     Motion, Moves, Position, Scale, ScreenDirection, Shot, ShotDraft,
-                                                     ShotKind, ShotSize, Slot, Speed, StoryboardDraft, Transition)
+from src.schema.lesson.lesson_schema import BandRules, FormatRules, GradeBand, LessonSequence, VideoType
+from src.schema.storyboard.storyboard_schema import (Angle, BoardHeader, CameraMove, CastKind, CastMember, Continuity,
+                                                     Direction, Motion, Moves, Position, Scale, ScreenDirection,
+                                                     SequencePlaces, Shot, ShotDraft, ShotKind, ShotSize, Slot, Speed,
+                                                     StoryboardDraft, Transition)
 from src.service.lesson.lesson_rules import TEMPLATES
 
 HOST = "host"
@@ -95,8 +96,15 @@ def wanted(slots: list[Slot]) -> set[str]:
     return {s.id for s in slots if s.repeat_of is None}
 
 
-def header_problems(draft: StoryboardDraft, band: BandRules, slots: list[Slot]) -> list[str]:
-    """Problems with the cast, places, motifs, shape and outfit; any of these re-asks the whole board."""
+def zoom_only(sequence_places: list[SequencePlaces]) -> set[str]:
+    """Places used only as zooms; they show a topic closer or wider, so they are not counted as places."""
+    return {q.zoom for q in sequence_places if q.zoom} - {q.home for q in sequence_places}
+
+
+def header_problems(draft: StoryboardDraft, band: BandRules, slots: list[Slot],
+                    zooms: set[str] | None = None) -> list[str]:
+    """Problems with the cast, places, motifs, shape and outfit; any of these re-asks the header. zooms:
+    places left out of the place count."""
     found = _words("shape", draft.shape, LIMITS["shape"], faces_allowed=True, digits_allowed=True)
     wardrobe = wardrobe_for(band.band)
     for p in draft.places:
@@ -118,9 +126,31 @@ def header_problems(draft: StoryboardDraft, band: BandRules, slots: list[Slot]) 
     if not draft.places:
         found.append("places must list at least one place")
     used = {s.place for s in draft.shots if s.slot in wanted(slots)}       # the given host place is not counted
-    in_use = sum(p.id in used for p in draft.places)
+    in_use = sum(p.id in used and p.id not in (zooms or set()) for p in draft.places)
     if in_use > band.max_places:
         found.append(f"{in_use} places used; at most {band.max_places} for grades {band.band}")
+    return found
+
+
+def sequence_place_problems(header: BoardHeader, sequences: list[LessonSequence]) -> list[str]:
+    """Every sequence gets a declared home place and at most one zoom place at another scale; sequences the
+    lesson set in the same place share a home."""
+    places = {p.id: p for p in header.places}
+    if len(header.sequence_places) != len(sequences):
+        return [f"sequence_places must give exactly {len(sequences)} entries, one per sequence in order"]
+    found = []
+    for k, sp in enumerate(header.sequence_places):
+        for role, place in (("home", sp.home), ("zoom", sp.zoom)):
+            if place is not None and place not in places:
+                found.append(f"sequence {k + 1}'s {role} place {place!r} is not in places")
+        if sp.zoom in places and sp.home in places and places[sp.zoom].scale == places[sp.home].scale:
+            found.append(f"sequence {k + 1}'s zoom place {sp.zoom!r} has the same scale as its home {sp.home!r}; a "
+                         "zoom shows the topic closer or wider, otherwise leave zoom empty")
+    for k, q in enumerate(sequences):
+        first = next(j for j, other in enumerate(sequences) if other.place == q.place)
+        if header.sequence_places[k].home != header.sequence_places[first].home:
+            found.append(f"sequences {first + 1} and {k + 1} are set in the same place in the lesson; give both the "
+                         f"home {header.sequence_places[first].home!r}")
     return found
 
 
@@ -165,8 +195,8 @@ def timeline(draft: StoryboardDraft, slots: list[Slot]) -> list[tuple[Slot, Shot
 
 
 def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fmt: FormatRules,
-                  host: CastMember) -> dict[str, list[str]]:
-    """Problems per slot id; only those shots are re-asked."""
+                  host: CastMember, sequence_places: list[SequencePlaces] | None = None) -> dict[str, list[str]]:
+    """Problems per slot id. sequence_places: the home and zoom place each sequence's picture shots are in."""
     found: dict[str, list[str]] = {}
 
     def add(slot_id: str, problem: str) -> None:
@@ -187,6 +217,11 @@ def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fm
             continue
         if shot.place not in places:
             add(slot.id, f"place {shot.place!r} is not in places")
+        elif sequence_places and slot.kind != ShotKind.SUNG:
+            sp = sequence_places[slot.sequence]
+            if shot.place not in (sp.home, sp.zoom):
+                allowed = f"its home {sp.home!r}" + (f" or its zoom {sp.zoom!r}" if sp.zoom else "")
+                add(slot.id, f"a picture shot of sequence {slot.sequence + 1} is in {allowed}, not {shot.place!r}")
         elif slot.kind == ShotKind.SUNG and not places[shot.place].walkable:
             add(slot.id, f"a sung shot needs a place where a person can really stand; {shot.place!r} is not walkable")
         unknown = [s for s in shot.subjects if s not in cast]

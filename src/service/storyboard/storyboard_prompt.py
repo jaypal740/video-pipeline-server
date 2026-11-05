@@ -1,10 +1,10 @@
-from src.schema.lesson.lesson_schema import BandRules, FormatRules, LessonPlan, VideoType
+from src.schema.lesson.lesson_schema import BandRules, FormatRules, LessonPlan, LessonSequence, VideoType
 from src.schema.song.song_analysis_schema import LyricLine
-from src.schema.storyboard.storyboard_schema import CastMember, ShotKind, Slot, StoryboardDraft
+from src.schema.storyboard.storyboard_schema import BoardHeader, CastMember, ShotDraft, ShotKind, Slot
 from src.service.storyboard.storyboard_rules import HOST, LIMITS
 
 # Bumped whenever the prompt changes, so every run is boarded again with the new prompt.
-PROMPT_VERSION = "storyboard.v9"
+PROMPT_VERSION = "storyboard.v10"
 
 SYSTEM = f"""You storyboard short educational music videos for school classes. The song, its lesson plan \
 and the shot timings already exist; you decide what each shot shows and how the camera films it. An image \
@@ -30,8 +30,14 @@ your own. Leave it out for places the host never appears in.
 most {LIMITS["motif rule"]} words. A motif is about appearance only (colour, material, shape), never about \
 where a thing is or what it does. Write each motif's rule into the look of the cast member or place it \
 belongs to, so every picture keeps it.
+- sequence_places: one entry per sequence of the lesson, in order. home: the place the sequence is \
+shown in; sequences the lesson sets in the same place share a home. zoom, when the topic needs it: one \
+more place that shows the same topic at another scale, such as the air up close above a hilltop or the \
+atoms inside the Sun's core, so small things are seen at their own size and far views from where they \
+really are. Leave zoom empty when the home shows everything.
 
-Then one shot per slot you are given (skip slots marked as repeats; code copies them):
+Then, one sequence at a time, one shot per slot of that sequence (skip slots marked as repeats; code \
+copies them):
 - place and subjects (up to 3 ids from cast). A subject must suit the place's scale: a hose-sized cable is \
 never the subject of a planet-wide view; leave subjects empty when the place itself is the picture.
 - size (wide, medium_wide, medium, medium_close, close, extreme_close), angle (eye, low, high, overhead) and \
@@ -68,7 +74,10 @@ exists. Code only adjusts the framing.
 end_state, so the cut joins up.
 - Lighting stays the same within a shot; show time passing with a cut or a dissolve, never inside one clip.
 - Follow the lesson's idea for each line; change it only when continuity needs it, and keep what it teaches.
-- Use few places and come back to them: the video should feel like one connected film, not a slideshow."""
+- Use few places and come back to them: the video should feel like one connected film, not a slideshow.
+- Each sequence shows its topic unfolding in its home place, shot after shot, toward the change the \
+lesson gives it, moving to its zoom place and back only where the topic changes scale. Its first shot \
+carries on from the shot before it; its last shot leads into the next sequence."""
 
 
 def _slot_line(slot: Slot, lines: dict[int, LyricLine], plan: dict) -> str:
@@ -84,10 +93,19 @@ def _slot_line(slot: Slot, lines: dict[int, LyricLine], plan: dict) -> str:
     return head + f"{kind} | {sung} | {ideas}"
 
 
+def _sequence_line(k: int, q: LessonSequence) -> str:
+    return (f"Sequence {k + 1}, lines {q.first_line}-{q.last_line}: {q.topic} | place: {q.place} | change: "
+            f"{q.change} | terms: {', '.join(q.terms) or 'none'}")
+
+
 def user_prompt(plan: LessonPlan, lines: list[LyricLine], slots: list[Slot], band: BandRules, fmt: FormatRules,
                 host: CastMember, wardrobe: dict[str, str]) -> str:
+    """The whole film, given to every call: the lesson, the rules, every sequence and every slot."""
     by_index = {l.index: l for l in lines}
     lesson = {l.index: l for l in plan.lines}
+    grouped = "\n".join(_sequence_line(k, q) + "".join(f"\n  {_slot_line(s, by_index, lesson)}"
+                                                       for s in slots if s.sequence == k)
+                        for k, q in enumerate(plan.sequences))
     return (f"Topic: {plan.topic} ({plan.subject}). {plan.summary}\n"
             f"Must not teach: {'; '.join(plan.must_not_teach) or 'nothing listed'}.\n\n"
             f"Audience: grades {band.band}. Look: {band.look} Avoid: {'; '.join(band.avoid)}.\n"
@@ -107,11 +125,29 @@ def user_prompt(plan: LessonPlan, lines: list[LyricLine], slots: list[Slot], ban
               "member with kind person, listed in the subjects of every shot they are in. Passers-by, a crowd, or "
               "a hand holding something need no cast entry."
             + "\n\n"
-            "Slots, in order:\n" + "\n".join(_slot_line(s, by_index, lesson) for s in slots))
+            "Sequences and their slots, in order:\n" + grouped)
 
 
-def patch_prompt(user: str, draft: StoryboardDraft, problems: dict[str, list[str]]) -> str:
-    listed = "\n".join(f"- {slot_id}: " + "; ".join(found) for slot_id, found in sorted(problems.items()))
-    return (f"{user}\n\nThe storyboard so far:\n{draft.model_dump_json()}\n\n"
-            "Rewrite only these shots, keeping the cast, places and every other shot as they are. Return just "
-            f"these shots, each with every problem fixed:\n{listed}")
+def header_prompt(user: str, sequences: list[LessonSequence]) -> str:
+    return (f"{user}\n\nWrite the header for the whole video now: shape, cast, places, motifs, and "
+            f"sequence_places with {len(sequences)} entries, one per sequence in order. No shots yet; they "
+            "come one sequence at a time.")
+
+
+def _where(header: BoardHeader, k: int) -> str:
+    sp = header.sequence_places[k]
+    return sp.home + (f", zooming to {sp.zoom}" if sp.zoom else "")
+
+
+def sequence_prompt(user: str, header: BoardHeader, done: list[ShotDraft], k: int, sequences: list[LessonSequence],
+                    todo: list[str]) -> str:
+    """One sequence's shots, written with the whole film in view: the fixed header, every shot so far, and
+    where the next sequence goes."""
+    after = (f"its last shot leads into sequence {k + 2}, {sequences[k + 1].topic}, in "
+             f"{header.sequence_places[k + 1].home}" if k + 1 < len(sequences) else "its last shot ends the video")
+    before = "\n".join(s.model_dump_json() for s in done) or "none yet; this sequence opens the video"
+    return (f"{user}\n\nThe header, fixed for the whole video (use its ids; add no cast or places):\n"
+            f"{header.model_dump_json()}\n\nShots written so far, in order:\n{before}\n\n"
+            f"Now write sequence {k + 1} of {len(sequences)}, {sequences[k].topic}, in "
+            f"{_where(header, k)}: one shot for each of the slots {', '.join(todo)}. Its first shot "
+            f"carries on from the last shot above; {after}.")
