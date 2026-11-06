@@ -12,6 +12,7 @@ from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.run.stage_state_schema import StageState
 from src.schema.storyboard.storyboard_schema import Shot, ShotKind, Storyboard, Transition
+from src.service.assembly.captions import caption_track
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.storage.storage_service import Storage
 
@@ -21,6 +22,7 @@ MAX_STRETCH = 1.25          # a model clip is slowed at most this much to fill i
 BLACK_S = 0.5               # a black stretch longer than this fails the film
 BLACK_PIXEL = 0.05          # darker than this is black ...
 BLACK_PICTURE = 0.999       # ... and a frame is black only when nearly all of it is: a starry space sky is not
+CAPTIONS_VERSION = "captions.v2"    # bumped when the captions change, so films are assembled again
 
 
 class AssemblyService:
@@ -43,7 +45,10 @@ class AssemblyService:
         clips = self._clips(run_id, board)
         s = self._settings
         fps, size, dissolve = s.assembly_fps, (s.assembly_width, s.assembly_height), s.assembly_dissolve_s
-        key = hashlib.sha256("|".join([f"{size[0]}x{size[1]}:{fps}:{dissolve}", *(
+        song = self._songs.songs.get(self._runs.runs.get(run_id).song_id)
+        analysis = self._songs.analyses.get(song.analysis_id) if song.analysis_id else None
+        timing = [(w.line_index, w.text, w.start, w.end) for w in analysis.words] if analysis else []
+        key = hashlib.sha256("|".join([f"{size[0]}x{size[1]}:{fps}:{dissolve}", f"{CAPTIONS_VERSION}:{timing}", *(
             f"{shot.id}:{shot.start}:{shot.end}:{shot.transition_in}:{clips[shot.id][0].id}" for shot in board.shots)])
                              .encode()).hexdigest()
 
@@ -55,7 +60,6 @@ class AssemblyService:
         state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
         state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
         state = self._runs.stage_states.update(state)
-        song = self._songs.songs.get(self._runs.runs.get(run_id).song_id)
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 work, rows = Path(tmp), []
@@ -70,8 +74,10 @@ class AssemblyService:
                                  "frames": frames})
                 film = work / "film.mp4"
                 start = round(board.shots[0].start * fps) / fps
-                self._assemble(work, board.shots, rows, Path(song.audio_path), start, film)
                 total = sum(r["frames"] for r in rows)
+                captions = (caption_track(analysis.lines, analysis.words, start, total / fps, *size, work)
+                            if analysis and analysis.words else None)
+                self._assemble(work, board.shots, rows, Path(song.audio_path), start, film, captions)
                 problems = self._problems(film, total)
                 data = film.read_bytes()
         except Exception as exc:
@@ -109,10 +115,11 @@ class AssemblyService:
                           f"format=yuv420p", "-frames:v", str(frames), "-c:v", "libx264", "-crf", "18", str(out)])
         return round(1 / stretch, 4)
 
-    def _assemble(self, work: Path, shots: list[Shot], rows: list[dict], song: Path, start: float, out: Path) -> None:
+    def _assemble(self, work: Path, shots: list[Shot], rows: list[dict], song: Path, start: float, out: Path,
+                  captions: Path | None = None) -> None:
         """Clips in board order. A dissolve overlaps the incoming clip by the dissolve length, held on its
         first frame, so every clip still starts at its own slot time and the song stays in sync. settb after
-        every join keeps xfade's inputs on one timebase."""
+        every join keeps xfade's inputs on one timebase. captions: the lyric pictures laid over the whole film."""
         fps, d = self._settings.assembly_fps, self._settings.assembly_dissolve_s
         inputs, chain, length, label = [], [], 0.0, None
         for i, (shot, row) in enumerate(zip(shots, rows)):
@@ -127,8 +134,14 @@ class AssemblyService:
                 chain.append(f"[{i}:v]settb=1/{fps}[c{i}]")
                 chain.append(f"[{label}][c{i}]concat=n=2:v=1:a=0,settb=1/{fps}[v{i}]")
             label, length = f"v{i}", length + row["frames"] / fps
+        if captions is not None:
+            inputs += ["-f", "concat", "-safe", "0", "-i", str(captions)]
+            chain.append(f"[{len(shots)}:v]fps={fps},format=rgba,settb=1/{fps}[cap]")
+            chain.append(f"[{label}][cap]overlay=0:0:eof_action=pass,format=yuv420p[film]")
+            label = "film"
         inputs += ["-ss", f"{start:.4f}", "-i", str(song)]
-        self._ffmpeg.run([*inputs, "-filter_complex", ";".join(chain), "-map", f"[{label}]", "-map", f"{len(shots)}:a",
+        self._ffmpeg.run([*inputs, "-filter_complex", ";".join(chain), "-map", f"[{label}]",
+                          "-map", f"{len(shots) + (captions is not None)}:a",
                           "-t", f"{length:.4f}", "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac",
                           "-b:a", "192k", "-movflags", "+faststart", str(out)])
 

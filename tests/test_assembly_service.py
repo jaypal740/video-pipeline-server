@@ -10,6 +10,7 @@ from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.lesson.lesson_schema import GradeBand
 from src.schema.run.run_schema import Run
 from src.schema.run.stage_state_schema import StageState
+from src.schema.song.song_analysis_schema import LyricLine, SongAnalysis, TimedWord
 from src.schema.song.song_schema import Song
 from src.service.assembly.assembly_service import AssemblyService
 from src.service.storage.storage_service import LocalStorage
@@ -154,3 +155,32 @@ def test_a_clip_that_holds_still_at_the_end_is_cut_where_it_stopped_moving(stage
     assert rows["s01"]["speed"] < 1.0                               # 1.25 s of action spread over the 1.5 s slot
     assert near(colour_at(film, 1.0), RED)                          # whole 2 s squeezed in would be blue by now
     assert near(colour_at(film, 1.5 - 1 / FPS - 0.01), BLUE)        # and it still ends on its ending
+
+
+def test_the_lyrics_are_laid_over_the_film_while_each_line_is_sung(stage, container):
+    service, storage, song, tmp_path = stage
+    container.settings().assembly_width, container.settings().assembly_height = 640, 360
+    run, _ = assembled_run(container, storage, song, tmp_path)
+    songs = container.song_repository()
+    analysis = songs.analyses.add(SongAnalysis(
+        cache_key="k", audio_sha256="a", lyrics_sha256="l", duration_s=5, accepted=True,
+        lines=[LyricLine(index=0, text="Red ship", start=0.2, end=1.2, confidence=0.9)],
+        words=[TimedWord(index=0, line_index=0, text="Red", start=0.2, end=0.6),
+               TimedWord(index=1, line_index=0, text="ship", start=0.7, end=1.2)]))
+    record = songs.songs.get(run.song_id)
+    record.analysis_id = analysis.id
+    songs.songs.update(record)
+    film = storage.path(service.run(run.id).path)
+    assert container.ffmpeg_service().packets(film)["video"] == 96
+    caption = lambda t: colour_at_box(film, t, 640, 360)
+    assert near(caption(0.1), RED) and near(caption(1.4), BLUE)          # before and after the line: the shot
+    assert near(caption(0.5), (102, 0, 0))                               # while it is sung: the box, 60% black
+
+
+def colour_at_box(film, seconds, width, height) -> np.ndarray:
+    """The mean colour of a small patch just inside the caption box's bottom edge, at the frame's centre."""
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{seconds:.4f}", "-i", str(film), "-frames:v", "1", "-f",
+                          "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
+    frame = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 3)
+    y = int(height - height * 0.08)
+    return frame[y - 2:y, width // 2 - 5:width // 2 + 5].reshape(-1, 3).mean(axis=0)
