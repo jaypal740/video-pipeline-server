@@ -83,7 +83,10 @@ class LessonLine(BaseModel):
 
 class LessonSequence(BaseModel):
     """A run of lines on one topic, shown in one place. change: what visibly changes from its first shot
-    to its last; terms: the key terms its lines name and its pictures show."""
+    to its last; terms: the key terms its lines name and its pictures show; fact: what a viewer must
+    understand from the pictures alone, with the sound off; steps: the visible stages that show it, in order;
+    shown_terms: key terms its pictures show and name although its lines don't sing them (the corona, when
+    explaining the Sun's layers)."""
 
     first_line: int
     last_line: int
@@ -91,6 +94,9 @@ class LessonSequence(BaseModel):
     place: str
     change: str
     terms: list[str] = Field(default_factory=list)
+    fact: str = ""
+    steps: list[str] = Field(default_factory=list)
+    shown_terms: list[str] = Field(default_factory=list)
 
 
 class LessonDraft(BaseModel):

@@ -1,10 +1,11 @@
 from src.schema.lesson.lesson_schema import BandRules, FormatRules, LessonPlan, LessonSequence, VideoType
 from src.schema.song.song_analysis_schema import LyricLine
-from src.schema.storyboard.storyboard_schema import BoardHeader, CastMember, ShotDraft, ShotKind, Slot
+from src.schema.storyboard.storyboard_schema import (BoardHeader, CastMember, ShotDraft, ShotKind, Slot,
+                                                     SoundOffWatch, StoryboardDraft, Verdict)
 from src.service.storyboard.storyboard_rules import HOST, LIMITS
 
 # Bumped whenever the prompt changes, so every run is boarded again with the new prompt.
-PROMPT_VERSION = "storyboard.v10"
+PROMPT_VERSION = "storyboard.v11"
 
 SYSTEM = f"""You storyboard short educational music videos for school classes. The song, its lesson plan \
 and the shot timings already exist; you decide what each shot shows and how the camera films it. An image \
@@ -31,13 +32,16 @@ most {LIMITS["motif rule"]} words. A motif is about appearance only (colour, mat
 where a thing is or what it does. Write each motif's rule into the look of the cast member or place it \
 belongs to, so every picture keeps it.
 - sequence_places: one entry per sequence of the lesson, in order. home: the place the sequence is \
-shown in; sequences the lesson sets in the same place share a home. zoom, when the topic needs it: one \
-more place that shows the same topic at another scale, such as the air up close above a hilltop or the \
-atoms inside the Sun's core, so small things are seen at their own size and far views from where they \
-really are. Leave zoom empty when the home shows everything.
+shown in; sequences the lesson sets in the same place share a home. zooms, when the topic needs them: up \
+to two more places that show the same topic at other scales, one closer and one wider, such as the atoms \
+inside the Sun's core, or Earth's orbit where a satellite is hit, so small things are seen at their own \
+size and far views from where they really are. Every step of the sequence must have a place at its scale \
+among the home and zooms. Leave zooms empty when the home shows everything. times, when the sequence \
+passes through other hours: the home location declared again as its own place with that lighting (the \
+same field at night, at dusk), so a night shot is drawn from a night plate. A shot that opens at night, \
+dusk, noon or dawn is set in a place lit for that hour.
 
-Then, one sequence at a time, one shot per slot of that sequence (skip slots marked as repeats; code \
-copies them):
+Then, one sequence at a time, one shot per slot of that sequence:
 - place and subjects (up to 3 ids from cast). A subject must suit the place's scale: a hose-sized cable is \
 never the subject of a planet-wide view; leave subjects empty when the place itself is the picture.
 - size (wide, medium_wide, medium, medium_close, close, extreme_close), angle (eye, low, high, overhead) and \
@@ -52,10 +56,28 @@ truck and orbit: left or right; tilt and pedestal: up or down; follow: left, rig
 (slow, medium, fast). One move per shot.
 - motion (low, medium, high), screen_direction (left_to_right, right_to_left, toward, away, none) and \
 transition_in (cut, match_cut, dissolve).
-- moves: subject when something in the picture moves or changes; camera when everything in the picture \
-stays as it is and only the camera moves over it.
+- moves: always subject. Something in the picture really moves or changes in every shot; a still \
+picture with only the camera moving over it reads as a slideshow.
+- step: the number of the sequence's step the shot shows, from 1. Sung shots give the step the sequence \
+has reached.
+- label: when a term from the sequence's terms is sung during this slot and the shot is framed on the \
+thing it names, that term exactly as listed; our code draws it on screen. A shown term, which the song does \
+not sing, labels the shot framed on that part wherever it fits. Otherwise leave it empty.
 
 Rules:
+- Teach with the sound off: a viewer who cannot hear the song must understand each sequence's fact from the \
+pictures and labels alone. Give every step of the sequence at least one shot, following the words as they \
+are sung, one clear idea per shot.
+- Label every term a sequence sings: a labelled shot is framed on the one thing its label names, as the \
+main subject in a side third, so the label is drawn in the open side. To explain parts (layers, organs, \
+stages), keep one view and give each part its own labelled shot as it is sung.
+- Film the real thing where it really is, never a picture of it on a screen, card, poster or window.
+- A locked camera needs medium or high motion in the picture; a gentle change gets a slow pan, tilt or \
+truck along with it, so no shot reads as a still.
+- A slow change (frost spreading, a plant growing or wilting, the Sun turning) is a time-lapse: its \
+end_state is clearly different from its start_state across the whole frame.
+- A chorus sung again gets new shots: keep the chorus's place and look, move its idea further, and never \
+repeat an earlier shot.
 - Only people are characters. Cells, germs, molecules, animals, objects and ideas look and behave as they \
 really do: never faces, eyes or expressions on them, no mascots, no invented metaphors.
 - Pictures carry no text, labels, charts, numbers or digits; our code draws every word and figure. Write \
@@ -72,7 +94,8 @@ inside one of this video's walkable places, in the chosen outfit; declare a fitt
 exists. Code only adjusts the framing.
 - In the same place, a shot starts where the shot before it ended: its start_state carries on from that \
 end_state, so the cut joins up.
-- Lighting stays the same within a shot; show time passing with a cut or a dissolve, never inside one clip.
+- A shot opens in the lighting of its place; a time-lapse may carry the light on within the clip, and the \
+next shot is set in the place lit for where it ends. Hours never jump inside a plain clip.
 - Follow the lesson's idea for each line; change it only when continuity needs it, and keep what it teaches.
 - Use few places and come back to them: the video should feel like one connected film, not a slideshow.
 - Each sequence shows its topic unfolding in its home place, shot after shot, toward the change the \
@@ -80,30 +103,32 @@ lesson gives it, moving to its zoom place and back only where the topic changes 
 carries on from the shot before it; its last shot leads into the next sequence."""
 
 
-def _slot_line(slot: Slot, lines: dict[int, LyricLine], plan: dict) -> str:
+def _slot_line(slot: Slot, lines: dict[int, LyricLine], plan: dict, sung: str | None = None) -> str:
     head = f"{slot.id} | {slot.start:.1f}-{slot.end:.1f}s ({slot.end - slot.start:.1f}s) | "
-    if slot.repeat_of:
-        return head + f"repeat of {slot.repeat_of}: code copies it, write nothing"
     if slot.kind == ShotKind.MUSIC:
         return head + "music, no lyrics"
     kind = {ShotKind.SUNG: "sung by the host to camera", ShotKind.NUMBER: f"number shot, code draws {slot.number_text}",
             ShotKind.ILLUSTRATE: "picture", ShotKind.UNCLEAR: "picture (the words may be misheard)"}[slot.kind]
-    sung = " / ".join(f"line {i}: {lines[i].text}" for i in slot.lines)
+    sung = f"sings: {sung}" if sung is not None else " / ".join(f"line {i}: {lines[i].text}" for i in slot.lines)
     ideas = " / ".join(f"teaches {plan[i].teaches}; idea: {plan[i].show}" for i in slot.lines)
     return head + f"{kind} | {sung} | {ideas}"
 
 
 def _sequence_line(k: int, q: LessonSequence) -> str:
+    steps = "; ".join(f"{i + 1}. {step}" for i, step in enumerate(q.steps)) or "none"
     return (f"Sequence {k + 1}, lines {q.first_line}-{q.last_line}: {q.topic} | place: {q.place} | change: "
-            f"{q.change} | terms: {', '.join(q.terms) or 'none'}")
+            f"{q.change} | terms: {', '.join(q.terms) or 'none'}"
+            + (f" | shown terms: {', '.join(q.shown_terms)}" if q.shown_terms else "")
+            + f" | fact: {q.fact or 'none'} | steps: {steps}")
 
 
 def user_prompt(plan: LessonPlan, lines: list[LyricLine], slots: list[Slot], band: BandRules, fmt: FormatRules,
-                host: CastMember, wardrobe: dict[str, str]) -> str:
-    """The whole film, given to every call: the lesson, the rules, every sequence and every slot."""
+                host: CastMember, wardrobe: dict[str, str], sung: dict[str, str] | None = None) -> str:
+    """The whole film, given to every call: the lesson, the rules, every sequence and every slot. sung: the
+    words sung during each slot, so a line split across shots shows each shot its own words."""
     by_index = {l.index: l for l in lines}
     lesson = {l.index: l for l in plan.lines}
-    grouped = "\n".join(_sequence_line(k, q) + "".join(f"\n  {_slot_line(s, by_index, lesson)}"
+    grouped = "\n".join(_sequence_line(k, q) + "".join(f"\n  {_slot_line(s, by_index, lesson, (sung or {}).get(s.id))}"
                                                        for s in slots if s.sequence == k)
                         for k, q in enumerate(plan.sequences))
     return (f"Topic: {plan.topic} ({plan.subject}). {plan.summary}\n"
@@ -136,7 +161,8 @@ def header_prompt(user: str, sequences: list[LessonSequence]) -> str:
 
 def _where(header: BoardHeader, k: int) -> str:
     sp = header.sequence_places[k]
-    return sp.home + (f", zooming to {sp.zoom}" if sp.zoom else "")
+    return (sp.home + (f", zooming to {' and '.join(sp.zooms)}" if sp.zooms else "")
+            + (f", also at other hours in {' and '.join(sp.times)}" if sp.times else ""))
 
 
 def sequence_prompt(user: str, header: BoardHeader, done: list[ShotDraft], k: int, sequences: list[LessonSequence],
@@ -151,3 +177,44 @@ def sequence_prompt(user: str, header: BoardHeader, done: list[ShotDraft], k: in
             f"Now write sequence {k + 1} of {len(sequences)}, {sequences[k].topic}, in "
             f"{_where(header, k)}: one shot for each of the slots {', '.join(todo)}. Its first shot "
             f"carries on from the last shot above; {after}.")
+
+
+WATCH_SYSTEM = """You watch a short educational video for school classes with the sound off: you cannot hear \
+the song. You are given each shot as what it shows, with any word or figure drawn on screen. For each \
+sequence, write in two plain sentences what a viewer learns from these pictures alone. Write only what the \
+pictures and on-screen words really show; do not guess what a song might have said."""
+
+REVIEW_SYSTEM = """You check an educational video against its lesson. For each sequence you are given the \
+fact it must teach and what a viewer learned from it with the sound off. clear is true when that viewer \
+understood the fact; otherwise clear is false and missing says, in one sentence, what the pictures fail to \
+show."""
+
+
+def watch_prompt(board: StoryboardDraft, slots: list[Slot], count: int) -> str:
+    """The shots of every sequence as a viewer sees them: no lyrics, no lesson, only pictures and on-screen
+    words."""
+    places = {p.id: p.look for p in board.places}
+    by_slot = {s.slot: s for s in board.shots}
+    parts = []
+    for k in range(count):
+        shots = []
+        for slot in (s for s in slots if s.sequence == k and s.id in by_slot):
+            shot = by_slot[slot.id]
+            screen = [t for t in (shot.label, slot.number_text) if t]
+            shots.append(f"- {places.get(shot.place, shot.place)}: {shot.start_state} {shot.action} "
+                         f"{shot.end_state}" + (f" On screen: {', '.join(screen)}." if screen else ""))
+        parts.append(f"Sequence {k + 1}:\n" + "\n".join(shots))
+    return "\n\n".join(parts)
+
+
+def review_prompt(sequences: list[LessonSequence], watched: SoundOffWatch) -> str:
+    learned = {w.sequence: w.learned for w in watched.sequences}
+    return "\n\n".join(f"Sequence {k + 1}\nFact to teach: {q.fact}\nSteps planned: {'; '.join(q.steps)}\n"
+                       f"Viewer learned with the sound off: {learned.get(k + 1, 'nothing')}"
+                       for k, q in enumerate(sequences))
+
+
+def rewrite_note(verdict: Verdict, learned: str, fact: str) -> str:
+    return (f"\n\nThis sequence was written before, but watched with the sound off a viewer learns only: {learned} "
+            f"It misses: {verdict.missing} Rewrite the whole sequence so its pictures and labels alone show its "
+            f"fact: {fact}")

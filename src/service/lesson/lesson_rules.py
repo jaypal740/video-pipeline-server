@@ -1,3 +1,4 @@
+import math
 import re
 import tomllib
 from difflib import SequenceMatcher
@@ -11,11 +12,16 @@ TEMPLATES = Path(__file__).resolve().parents[2] / "templates"
 REPEAT_SIMILAR = 0.8
 _AD_LIB = re.compile(r"\([^)]*\)")
 _WORD = re.compile(r"[a-z0-9']+")
+_DIGIT = re.compile(r"\d")
 # A sequence is one topic the viewer watches unfold; shorter than this it is just another picture,
 # longer than this it holds more than one topic.
 MIN_SEQUENCE_SECONDS = 8.0
 MAX_SEQUENCE_SECONDS = 40.0
 MAX_SEQUENCES = 8
+# A sequence shows its fact in this many visible steps, each long enough to be seen.
+MIN_STEPS, MAX_STEPS = 2, 4
+MIN_STEP_SECONDS = 2.5
+MAX_SHOWN_TERMS = 3
 
 
 def band_rules(band: GradeBand) -> BandRules:
@@ -72,9 +78,20 @@ def repeats(lines: list[LyricLine]) -> dict[int, int]:
     return found
 
 
-def sequence_problems(draft: LessonDraft, lines: list[LyricLine], featured: list[str]) -> list[str]:
+def step_seconds(band: GradeBand) -> float:
+    """The least a step may last: a shot of the band's longest length, so every step can get a shot."""
+    return max(MIN_STEP_SECONDS, band_rules(band).shot_seconds[1])
+
+
+def place_limit(band: GradeBand) -> int:
+    """How many places the sequences may use between them: the band's limit, less one kept for the host."""
+    return max(1, band_rules(band).max_places - 1)
+
+
+def sequence_problems(draft: LessonDraft, lines: list[LyricLine], featured: list[str],
+                      band: GradeBand | None = None) -> list[str]:
     """Sequences cover every line once in order, are long enough to show a topic unfolding, keep a chorus
-    sung again in its first place, and name the terms their lines sing."""
+    sung again in its first place, name the terms their lines sing, and say what they show and how."""
     seqs = draft.sequences
     if not seqs:
         return ["sequences must group every line into topic sequences"]
@@ -88,6 +105,11 @@ def sequence_problems(draft: LessonDraft, lines: list[LyricLine], featured: list
         return found
     by_index = {l.index: l for l in lines}
     home = {i: q for q in seqs for i in range(q.first_line, q.last_line + 1)}
+    least = step_seconds(band) if band else MIN_STEP_SECONDS
+    places = sorted({q.place for q in seqs})
+    if band and len(places) > place_limit(band):
+        found.append(f"the sequences use {len(places)} places {places}; at most {place_limit(band)} for grades "
+                     f"{band}, so give some sequences the same place")
     for q in seqs:
         text = " ".join(by_index[i].text.lower() for i in range(q.first_line, q.last_line + 1))
         seconds = by_index[q.last_line].end - by_index[q.first_line].start
@@ -97,6 +119,26 @@ def sequence_problems(draft: LessonDraft, lines: list[LyricLine], featured: list
         if seconds > MAX_SEQUENCE_SECONDS:
             found.append(f"sequence {q.first_line}-{q.last_line} lasts {seconds:.1f} s; split it by topic so "
                          f"each part lasts at most {MAX_SEQUENCE_SECONDS:.0f} s")
+        if not q.fact.strip():
+            found.append(f"sequence {q.first_line}-{q.last_line} needs a fact: what a viewer must understand from it")
+        elif _DIGIT.search(q.fact) and not any(e.tag == LineTag.NUMBER and q.first_line <= e.index <= q.last_line
+                                              for e in draft.lines):
+            found.append(f"sequence {q.first_line}-{q.last_line}'s fact leans on a figure, but none of its lines is "
+                         "a number line, so no figure is drawn on screen; tag the line that sings it as number, or "
+                         "write the fact without the figure")
+        room = max(1, math.floor(seconds / least + 1e-9))                # a short sequence has room for fewer
+        fewest, most = min(MIN_STEPS, room), min(MAX_STEPS, room)
+        if not fewest <= len(q.steps) <= most:
+            found.append(f"sequence {q.first_line}-{q.last_line} has {len(q.steps)} steps; give {fewest} to {most} "
+                         f"visible steps, each at least {least:.1f} s of its {seconds:.1f} s")
+        defined = {t.term.lower() for t in draft.key_terms}
+        if len(q.shown_terms) > MAX_SHOWN_TERMS:
+            found.append(f"sequence {q.first_line}-{q.last_line} has {len(q.shown_terms)} shown_terms; at most "
+                         f"{MAX_SHOWN_TERMS}")
+        undefined = [t for t in q.shown_terms if t.lower() not in defined]
+        if undefined:
+            found.append(f"sequence {q.first_line}-{q.last_line} shows terms {undefined} that are not in key_terms; "
+                         "define them there or leave them out")
         missing = [t for t in q.terms if t.lower() not in text]
         if missing:
             found.append(f"sequence {q.first_line}-{q.last_line} lists terms its lines don't sing: {missing}")
@@ -126,8 +168,8 @@ def problems(draft: LessonDraft, lines: list[LyricLine], band: GradeBand, types:
     by_entry = {e.index: e for e in draft.lines}
     for index, first in repeats(lines).items():
         entry, original = by_entry.get(index), by_entry.get(first)
-        if entry and original and (entry.teaches, entry.show, entry.tag) != (original.teaches, original.show, original.tag):
-            found.append(f"line {index} repeats line {first}; give it the same teaches, show and tag")
+        if entry and original and entry.tag != original.tag:
+            found.append(f"line {index} repeats line {first}; give it the same tag")
     faces = 0
     for entry in draft.lines:
         line = by_index.get(entry.index)
@@ -142,4 +184,4 @@ def problems(draft: LessonDraft, lines: list[LyricLine], band: GradeBand, types:
         limit = face_limit(band, draft.video_type, len(lines))
         if faces > limit:
             found.append(f"{faces} lines are face_to_camera; at most {limit} are allowed for this band and type")
-    return found + sequence_problems(draft, lines, featured or [])
+    return found + sequence_problems(draft, lines, featured or [], band)

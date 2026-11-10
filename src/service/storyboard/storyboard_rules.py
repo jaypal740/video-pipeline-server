@@ -16,6 +16,10 @@ LIMITS = {"start_state": 30, "action": 20, "end_state": 20, "cast look": 25, "pl
           "size": 10, "motif rule": 15, "shape": 40, "outfit": 20}
 # A thing off screen this many shots in a row gets its reference sheet attached again when it returns.
 REANCHOR_AFTER = 4
+# A sequence may zoom to this many places at other scales, one closer and one wider.
+MAX_ZOOMS = 2
+# ... and show its home at this many other times of day.
+MAX_TIMES = 3
 
 _ID = re.compile(r"^[a-z][a-z0-9_]*$")
 _QUOTE = re.compile(r"[\"“”]")
@@ -45,6 +49,13 @@ _DIRECTIONS = {CameraMove.PAN: {Direction.LEFT, Direction.RIGHT}, CameraMove.TRU
                CameraMove.ORBIT: {Direction.LEFT, Direction.RIGHT}, CameraMove.TILT: {Direction.UP, Direction.DOWN},
                CameraMove.PEDESTAL: {Direction.UP, Direction.DOWN},
                CameraMove.FOLLOW: {Direction.LEFT, Direction.RIGHT, Direction.TOWARD, Direction.AWAY}}
+_WORD = re.compile(r"[a-z0-9']+")
+# Words that set a time of day in a shot, by family; a shot using one needs a place whose lighting says the same.
+_TIMES = {"night": r"night|stars?|starry|starlit|moon|moonlit|milky way|midnight",
+          "dusk": r"dusk|sunset|twilight|evening|sundown",
+          "noon": r"noon|midday",
+          "dawn": r"dawn|sunrise|daybreak|morning"}
+_TIME_WORDS = {k: re.compile(rf"\b({v})\b", re.I) for k, v in _TIMES.items()}
 _FLIPS = {(ScreenDirection.LEFT_TO_RIGHT, ScreenDirection.RIGHT_TO_LEFT),
           (ScreenDirection.RIGHT_TO_LEFT, ScreenDirection.LEFT_TO_RIGHT)}
 
@@ -97,8 +108,9 @@ def wanted(slots: list[Slot]) -> set[str]:
 
 
 def zoom_only(sequence_places: list[SequencePlaces]) -> set[str]:
-    """Places used only as zooms; they show a topic closer or wider, so they are not counted as places."""
-    return {q.zoom for q in sequence_places if q.zoom} - {q.home for q in sequence_places}
+    """Places used only as zooms or times; they show a home closer, wider or at another hour, so they are
+    not counted as places."""
+    return {z for q in sequence_places for z in q.zooms + q.times} - {q.home for q in sequence_places}
 
 
 def header_problems(draft: StoryboardDraft, band: BandRules, slots: list[Slot],
@@ -133,19 +145,33 @@ def header_problems(draft: StoryboardDraft, band: BandRules, slots: list[Slot],
 
 
 def sequence_place_problems(header: BoardHeader, sequences: list[LessonSequence]) -> list[str]:
-    """Every sequence gets a declared home place and at most one zoom place at another scale; sequences the
-    lesson set in the same place share a home."""
+    """Every sequence gets a declared home place, at most MAX_ZOOMS zoom places, each at a scale unlike the
+    home's and each other's, and at most MAX_TIMES time places at the home's own scale; sequences the lesson
+    set in the same place share a home."""
     places = {p.id: p for p in header.places}
     if len(header.sequence_places) != len(sequences):
         return [f"sequence_places must give exactly {len(sequences)} entries, one per sequence in order"]
     found = []
     for k, sp in enumerate(header.sequence_places):
-        for role, place in (("home", sp.home), ("zoom", sp.zoom)):
-            if place is not None and place not in places:
+        for role, place in [("home", sp.home)] + [("zoom", z) for z in sp.zooms] + [("time", t) for t in sp.times]:
+            if place not in places:
                 found.append(f"sequence {k + 1}'s {role} place {place!r} is not in places")
-        if sp.zoom in places and sp.home in places and places[sp.zoom].scale == places[sp.home].scale:
-            found.append(f"sequence {k + 1}'s zoom place {sp.zoom!r} has the same scale as its home {sp.home!r}; a "
-                         "zoom shows the topic closer or wider, otherwise leave zoom empty")
+        if len(sp.zooms) > MAX_ZOOMS:
+            found.append(f"sequence {k + 1} has {len(sp.zooms)} zooms; at most {MAX_ZOOMS}, one closer and one wider")
+        if len(sp.times) > MAX_TIMES:
+            found.append(f"sequence {k + 1} has {len(sp.times)} times; at most {MAX_TIMES}")
+        for t in sp.times:
+            if t in places and sp.home in places and places[t].scale != places[sp.home].scale:
+                found.append(f"sequence {k + 1}'s time place {t!r} is at another scale than its home {sp.home!r}; a "
+                             "time place is the same location with other lighting, so list it under zooms instead")
+        scales = {sp.home: places[sp.home].scale} if sp.home in places else {}
+        for z in sp.zooms:
+            if z in places and places[z].scale in scales.values():
+                same = next(p for p, s in scales.items() if s == places[z].scale)
+                found.append(f"sequence {k + 1}'s zoom place {z!r} has the same scale as {same!r}; a zoom shows the "
+                             "topic closer or wider, otherwise leave it out")
+            elif z in places:
+                scales[z] = places[z].scale
     for k, q in enumerate(sequences):
         first = next(j for j, other in enumerate(sequences) if other.place == q.place)
         if header.sequence_places[k].home != header.sequence_places[first].home:
@@ -159,6 +185,7 @@ def fix(shot: ShotDraft, slot: Slot, band: BandRules, people: set[str]) -> list[
     shots need. A sung shot shows one face for lip-sync: the host, with at most one thing. Returns what
     changed, for the log."""
     before = shot.model_dump(mode="json")
+    shot.moves = Moves.SUBJECT                                  # every shot shows something really moving
     cam = shot.camera
     if cam.move not in band.camera_moves:
         cam.move = CameraMove.STATIC
@@ -171,7 +198,7 @@ def fix(shot: ShotDraft, slot: Slot, band: BandRules, people: set[str]) -> list[
             shot.size = ShotSize.MEDIUM_CLOSE
         if cam.move not in (CameraMove.STATIC, CameraMove.PUSH_IN):
             cam.move = CameraMove.STATIC
-    if slot.kind == ShotKind.NUMBER and shot.position == Position.CENTRE:
+    if (slot.kind == ShotKind.NUMBER or shot.label) and shot.position == Position.CENTRE:
         shot.position = Position.RIGHT_THIRD
     if cam.move in _NO_DIRECTION:
         cam.direction = None
@@ -194,9 +221,62 @@ def timeline(draft: StoryboardDraft, slots: list[Slot]) -> list[tuple[Slot, Shot
     return [(slot, by_slot.get(slot.repeat_of or slot.id)) for slot in slots]
 
 
+def _plain(text: str) -> str:
+    return " " + " ".join(_WORD.findall(text.lower())) + " "
+
+
+def teaching_problems(draft: StoryboardDraft, slots: list[Slot], sequences: list[LessonSequence],
+                      sung: dict[str, str]) -> dict[str, list[str]]:
+    """Each sequence shows every lesson step at least once, labels every term it sings during a picture shot
+    while it is sung (a shot carries one label, so a term is excused where every shot singing it already
+    carries one), and labels each of its shown terms once anywhere. sung: the words sung during each slot. A sequence without steps (a plan
+    written before steps existed) is not checked. Problems for a whole sequence go on its first slot."""
+    found: dict[str, list[str]] = {}
+    by_slot = {s.slot: s for s in draft.shots}
+    for k, q in enumerate(sequences):
+        own = [(slot, by_slot[slot.id]) for slot in slots if slot.sequence == k and slot.id in by_slot]
+        if not own or not q.steps:
+            continue
+        terms = {t.lower(): t for t in q.terms}
+        shown = {t.lower(): t for t in q.shown_terms if t.lower() not in terms}
+        labelled = set()
+        for slot, shot in own:
+            if not 1 <= shot.step <= len(q.steps):
+                found.setdefault(slot.id, []).append(f"step must be one of the sequence's steps, 1 to {len(q.steps)}")
+            if shot.label is None:
+                continue
+            if shot.label.lower() in shown:
+                labelled.add(shot.label.lower())
+            elif shot.label.lower() not in terms:
+                found.setdefault(slot.id, []).append(f"label {shot.label!r} is not one of the sequence's terms "
+                                                     f"{sorted(terms.values()) + sorted(shown.values())}")
+            elif _plain(shot.label) not in _plain(sung.get(slot.id, "")):
+                found.setdefault(slot.id, []).append(f"label {shot.label!r} is not sung during this slot; label a "
+                                                     "term while it is sung")
+            else:
+                labelled.add(shot.label.lower())
+        first = own[0][0].id
+        unshown = sorted(set(range(1, len(q.steps) + 1)) - {shot.step for _, shot in own})
+        if unshown:
+            found.setdefault(first, []).append(f"sequence {k + 1} never shows step(s) {unshown}; give each step at "
+                                               "least one shot")
+        sings = {low: [shot for slot, shot in own if slot.kind != ShotKind.SUNG and _plain(t) in _plain(sung.get(slot.id, ""))]
+                 for low, t in terms.items()}
+        due = [terms[low] for low, shots in sings.items() if low not in labelled and shots
+               and any(shot.label is None for shot in shots)]
+        due += [t for low, t in shown.items() if low not in labelled]
+        if due:
+            found.setdefault(first, []).append(f"sequence {k + 1} never labels {due}; label each on a shot framed on "
+                                               "it, a sung term while it is sung")
+    return found
+
+
 def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fmt: FormatRules,
-                  host: CastMember, sequence_places: list[SequencePlaces] | None = None) -> dict[str, list[str]]:
-    """Problems per slot id. sequence_places: the home and zoom place each sequence's picture shots are in."""
+                  host: CastMember, sequence_places: list[SequencePlaces] | None = None,
+                  sequences: list[LessonSequence] | None = None,
+                  sung: dict[str, str] | None = None) -> dict[str, list[str]]:
+    """Problems per slot id. sequence_places: the home and zoom place each sequence's picture shots are in;
+    sequences and sung: what the steps and labels are checked against (see teaching_problems)."""
     found: dict[str, list[str]] = {}
 
     def add(slot_id: str, problem: str) -> None:
@@ -219,8 +299,9 @@ def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fm
             add(slot.id, f"place {shot.place!r} is not in places")
         elif sequence_places and slot.kind != ShotKind.SUNG:
             sp = sequence_places[slot.sequence]
-            if shot.place not in (sp.home, sp.zoom):
-                allowed = f"its home {sp.home!r}" + (f" or its zoom {sp.zoom!r}" if sp.zoom else "")
+            if shot.place not in (sp.home, *sp.zooms, *sp.times):
+                allowed = (f"its home {sp.home!r}" + (f" or its zooms {sp.zooms}" if sp.zooms else "")
+                           + (f" or its times {sp.times}" if sp.times else ""))
                 add(slot.id, f"a picture shot of sequence {slot.sequence + 1} is in {allowed}, not {shot.place!r}")
         elif slot.kind == ShotKind.SUNG and not places[shot.place].walkable:
             add(slot.id, f"a sung shot needs a place where a person can really stand; {shot.place!r} is not walkable")
@@ -238,13 +319,18 @@ def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fm
         people = sum(cast[s].kind == CastKind.PERSON for s in shot.subjects if s in cast)
         if people > band.max_people_in_frame:
             add(slot.id, f"{people} people in frame; at most {band.max_people_in_frame} for grades {band.band}")
+        if shot.place in places:
+            said = {family for family, rx in _TIME_WORDS.items() if rx.search(f"{shot.start_state} {shot.action}")}
+            lit = {family for family, rx in _TIME_WORDS.items() if rx.search(places[shot.place].lighting)}
+            for family in sorted(said - lit):
+                add(slot.id, f"the shot opens at {family} but {shot.place!r} is lit {places[shot.place].lighting!r}; "
+                             "set it in one of this sequence's places lit for that hour, or open it in the place's own "
+                             "light")
         if HOST in shot.subjects and shot.place in places and not places[shot.place].host_outfit:
             add(slot.id, f"the host appears in {shot.place!r}, so that place needs a host_outfit")
         if HOST in shot.subjects and slot.kind != ShotKind.SUNG and fmt.type != VideoType.PERSONALISED_HERO:
             add(slot.id, f"the host appears only in sung shots in a {fmt.type} video")
         move, direction = shot.camera.move, shot.camera.direction
-        if shot.moves == Moves.CAMERA and move == CameraMove.STATIC:
-            add(slot.id, "moves is camera but the camera is static; give the camera a move, or set moves to subject")
         if move in _DIRECTIONS and direction not in _DIRECTIONS[move]:
             add(slot.id, f"camera {move} needs a direction from {sorted(_DIRECTIONS[move])}")
         for field in ("start_state", "action", "end_state"):
@@ -292,6 +378,10 @@ def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fm
                 add(slot.id, f"scale jumps {step} steps from {places[prev.place].scale} to "
                              f"{places[shot.place].scale} on a plain cut; bring the viewer with it: come in on a "
                              "dissolve or match_cut, or let the shot before push in or pull back")
+    if sequences:
+        for slot_id, problems in teaching_problems(draft, slots, sequences, sung or {}).items():
+            for problem in problems:
+                add(slot_id, problem)
     return found
 
 

@@ -6,14 +6,16 @@ from pydantic import BaseModel
 from src.service.llm.llm_prices import PRICES, price_of
 from src.service.llm.llm_service import LabelledImage, LlmRefusal, ProviderReply
 
-MAX_TOKENS = 16000
+# Thinking and the answer share this limit; above about 21k tokens the SDK only allows a streamed call.
+MAX_TOKENS = 64000
 # Server-side refusal fallback: if a safety classifier declines, the API re-runs the request on a model it
 # picks for that refusal category, inside the same call.
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 
 class AnthropicService:
-    """Claude structured outputs through messages.parse. The client is built on first use, so the
+    """Claude structured outputs, streamed so long plans have room. The reply is read as JSON only after the
+    stop reason is known, so a cut-off reply is reported as such. The client is built on first use, so the
     container works without a key until a call is made."""
 
     name = "anthropic"
@@ -36,9 +38,12 @@ class AnthropicService:
         return self._parse(model, system, [{"role": "user", "content": content}], output_type, "low")
 
     def _parse(self, model: str, system: str, messages: list, output_type: type[BaseModel], effort: str) -> ProviderReply:
-        response = self._get_client().beta.messages.parse(
-            model=model, max_tokens=MAX_TOKENS, system=system, messages=messages, output_format=output_type,
-            output_config={"effort": effort}, betas=[FALLBACK_BETA], fallbacks="default")
+        schema = {"type": "json_schema", "schema": anthropic.transform_schema(output_type.model_json_schema())}
+        with self._get_client().beta.messages.stream(
+                model=model, max_tokens=MAX_TOKENS, system=system, messages=messages,
+                output_config={"effort": effort, "format": schema}, betas=[FALLBACK_BETA],
+                fallbacks="default") as stream:
+            response = stream.get_final_message()
         if response.stop_reason == "refusal":
             details = response.stop_details
             raise LlmRefusal(details.explanation if details else "no explanation")
@@ -50,7 +55,8 @@ class AnthropicService:
         written = usage.cache_creation_input_tokens or 0
         cost = (usage.input_tokens * price.input + cached * price.cached_input + written * price.input * 1.25
                 + usage.output_tokens * price.output) / 1_000_000
-        return ProviderReply(output=response.parsed_output, model=response.model,
+        text = "".join(b.text for b in response.content if b.type == "text")
+        return ProviderReply(output=output_type.model_validate_json(text), model=response.model,
                              input_tokens=usage.input_tokens + cached + written,
                              output_tokens=usage.output_tokens, cost_usd=cost)
 

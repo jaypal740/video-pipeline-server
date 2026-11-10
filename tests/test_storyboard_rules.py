@@ -77,15 +77,13 @@ def test_code_fixes_camera_sung_and_number_framing():
     assert k2.camera.move == CameraMove.STATIC
 
 
-def test_a_camera_shot_needs_a_camera_move_and_a_sung_shot_is_never_one():
-    s = slots(ShotKind.ILLUSTRATE, ShotKind.ILLUSTRATE, ShotKind.SUNG)
-    still = shot("s01", size=ShotSize.WIDE, moves=Moves.CAMERA)
-    tilt = shot("s02", moves=Moves.CAMERA, camera=Camera(move=CameraMove.TILT, direction=Direction.UP))
-    sung = shot("s03", moves=Moves.CAMERA, camera=Camera(move=CameraMove.PUSH_IN))
-    fix(sung, s[2], BAND, people=set())
-    found = shot_problems(board(still, tilt), s[:2], BAND, FMT, HOST)
-    assert list(found) == ["s01"] and "camera is static" in found["s01"][0]
-    assert sung.moves == Moves.SUBJECT
+def test_every_shot_becomes_a_subject_shot_so_nothing_is_a_still_picture():
+    s = slots(ShotKind.ILLUSTRATE, ShotKind.SUNG)
+    still = shot("s01", size=ShotSize.WIDE, moves=Moves.CAMERA, camera=Camera(move=CameraMove.TILT, direction=Direction.UP))
+    sung = shot("s02", moves=Moves.CAMERA, camera=Camera(move=CameraMove.PUSH_IN))
+    for draft, slot in ((still, s[0]), (sung, s[1])):
+        fix(draft, slot, BAND, people=set())
+    assert still.moves == Moves.SUBJECT and still.camera.move == CameraMove.TILT and sung.moves == Moves.SUBJECT
 
 
 def test_film_grammar_is_checked():

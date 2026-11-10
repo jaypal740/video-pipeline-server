@@ -31,11 +31,13 @@ class ProviderReply(BaseModel):
 
 
 class LlmError(Exception):
-    """A call that produced no usable output; call still carries what the failed attempts cost."""
+    """A call that produced no usable output; call still carries what the failed attempts cost, output the
+    last attempt's answer (None when the model refused) and problems what was wrong with it."""
 
-    def __init__(self, message: str, call: LlmCall) -> None:
+    def __init__(self, message: str, call: LlmCall, output: BaseModel | None = None,
+                 problems: list[str] | None = None) -> None:
         super().__init__(message)
-        self.call = call
+        self.call, self.output, self.problems = call, output, problems or []
 
 
 class LlmRefusal(Exception):
@@ -74,7 +76,7 @@ class LlmService:
         price_of(model)                                   # refuse an unpriced model before spending anything
         provider = self._anthropic if model.startswith("claude-") else self._openai
         call = LlmCall(provider=provider.name, model=model)
-        prompt, problems = user, []
+        prompt, problems, reply = user, [], None
         while call.attempts < max_attempts:
             call.attempts += 1
             try:
@@ -94,7 +96,8 @@ class LlmService:
             prompt = (f"{user}\n\nYour previous answer was:\n{reply.output.model_dump_json()}\n\n"
                       "It has these problems. Return the whole answer again with every problem fixed:\n"
                       + "\n".join(f"- {p}" for p in problems))
-        raise LlmError(f"{model} gave no valid answer in {max_attempts} attempts: " + "; ".join(problems), call)
+        raise LlmError(f"{model} gave no valid answer in {max_attempts} attempts: " + "; ".join(problems), call,
+                       reply.output if reply else None, problems)
 
     def inspect(self, model: str, system: str, user: str, images: list[LabelledImage],
                 output_type: type[T]) -> tuple[T, LlmCall]:

@@ -11,8 +11,8 @@ from src.schema.asset.asset_schema import Asset, ReviewState
 from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.run.stage_state_schema import StageState
-from src.schema.storyboard.storyboard_schema import Shot, ShotKind, Storyboard, Transition
-from src.service.assembly.captions import caption_track
+from src.schema.storyboard.storyboard_schema import Position, Shot, ShotKind, Storyboard, Transition
+from src.service.assembly.captions import Screen, caption_track
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.storage.storage_service import Storage
 
@@ -22,7 +22,7 @@ MAX_STRETCH = 1.25          # a model clip is slowed at most this much to fill i
 BLACK_S = 0.5               # a black stretch longer than this fails the film
 BLACK_PIXEL = 0.05          # darker than this is black ...
 BLACK_PICTURE = 0.999       # ... and a frame is black only when nearly all of it is: a starry space sky is not
-CAPTIONS_VERSION = "captions.v2"    # bumped when the captions change, so films are assembled again
+CAPTIONS_VERSION = "captions.v3"    # bumped when the captions change, so films are assembled again
 
 
 class AssemblyService:
@@ -48,7 +48,8 @@ class AssemblyService:
         song = self._songs.songs.get(self._runs.runs.get(run_id).song_id)
         analysis = self._songs.analyses.get(song.analysis_id) if song.analysis_id else None
         timing = [(w.line_index, w.text, w.start, w.end) for w in analysis.words] if analysis else []
-        key = hashlib.sha256("|".join([f"{size[0]}x{size[1]}:{fps}:{dissolve}", f"{CAPTIONS_VERSION}:{timing}", *(
+        screen = screen_words(board.shots)
+        key = hashlib.sha256("|".join([f"{size[0]}x{size[1]}:{fps}:{dissolve}", f"{CAPTIONS_VERSION}:{timing}:{screen}", *(
             f"{shot.id}:{shot.start}:{shot.end}:{shot.transition_in}:{clips[shot.id][0].id}" for shot in board.shots)])
                              .encode()).hexdigest()
 
@@ -75,8 +76,9 @@ class AssemblyService:
                 film = work / "film.mp4"
                 start = round(board.shots[0].start * fps) / fps
                 total = sum(r["frames"] for r in rows)
-                captions = (caption_track(analysis.lines, analysis.words, start, total / fps, *size, work)
-                            if analysis and analysis.words else None)
+                lines, words = (analysis.lines, analysis.words) if analysis else ([], [])
+                captions = (caption_track(lines, words, start, total / fps, *size, work, screen)
+                            if words or screen else None)
                 self._assemble(work, board.shots, rows, Path(song.audio_path), start, film, captions)
                 problems = self._problems(film, total)
                 data = film.read_bytes()
@@ -197,6 +199,18 @@ class AssemblyService:
         if missing:
             raise ValueError(f"Run {run_id} cannot be assembled: no clip for {', '.join(missing)}")
         return clips
+
+
+def screen_words(shots: list[Shot]) -> list[Screen]:
+    """The words code draws over each shot, from the storyboard: a term's label and a number shot's figure,
+    in the third the shot's main subject leaves open."""
+    found = []
+    for shot in shots:
+        texts = tuple(t for t in (shot.label, shot.number_text) if t)
+        if texts:
+            side = "right" if shot.position == Position.LEFT_THIRD else "left"
+            found.append((shot.start, shot.end, texts, side))
+    return found
 
 
 def frames_of(shots: list[Shot], i: int, fps: int) -> int:

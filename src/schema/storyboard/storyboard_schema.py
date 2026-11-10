@@ -194,6 +194,8 @@ class ShotDraft(BaseModel):
     screen_direction: ScreenDirection
     transition_in: Transition
     moves: Moves = Moves.SUBJECT                 # boards written before this field are all subject shots
+    step: int = 0                                # which step of its lesson sequence it shows, from 1
+    label: str | None = None                     # a term sung during the shot; code draws it on screen
 
 
 class StoryboardDraft(BaseModel):
@@ -208,11 +210,14 @@ class StoryboardDraft(BaseModel):
 
 
 class SequencePlaces(BaseModel):
-    """Where one lesson sequence is shown: its home place, and optionally a zoom place that shows the same
-    topic at another scale (the air up close above a hilltop, the core's atoms inside the Sun)."""
+    """Where one lesson sequence is shown: its home place; up to two zoom places that show the same topic at
+    other scales, one closer and one wider (the atoms inside the Sun's core; Earth's orbit where a satellite
+    is hit); and times: the home location declared again with other lighting (the field at night), so a
+    night shot is drawn from a night plate."""
 
     home: str
-    zoom: str | None = None
+    zooms: list[str] = Field(default_factory=list)
+    times: list[str] = Field(default_factory=list)      # the home location again at other times of day
 
 
 class BoardHeader(BaseModel):
@@ -230,6 +235,29 @@ class ShotPatch(BaseModel):
     """One sequence's shots."""
 
     shots: list[ShotDraft]
+
+
+class Watched(BaseModel):
+    """What one sequence teaches a viewer who watches it with the sound off."""
+
+    sequence: int
+    learned: str
+
+
+class SoundOffWatch(BaseModel):
+    sequences: list[Watched]
+
+
+class Verdict(BaseModel):
+    """Whether a sequence watched with the sound off shows its lesson fact; missing: what it fails to show."""
+
+    sequence: int
+    clear: bool
+    missing: str = ""
+
+
+class SoundOffReview(BaseModel):
+    sequences: list[Verdict]
 
 
 class Shot(ShotDraft):

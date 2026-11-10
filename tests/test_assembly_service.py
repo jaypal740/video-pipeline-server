@@ -184,3 +184,19 @@ def colour_at_box(film, seconds, width, height) -> np.ndarray:
     frame = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 3)
     y = int(height - height * 0.08)
     return frame[y - 2:y, width // 2 - 5:width // 2 + 5].reshape(-1, 3).mean(axis=0)
+
+
+def test_a_labelled_shot_gets_its_word_drawn_in_the_open_third(stage, container):
+    service, storage, song, tmp_path = stage
+    container.settings().assembly_width, container.settings().assembly_height = 640, 360
+    run, _ = assembled_run(container, storage, song, tmp_path)
+    runs = container.run_repository()
+    board = runs.stage(run.id, StageName.STORYBOARD)
+    board.output["shots"][0].update(label="ship", position="left_third")
+    runs.stage_states.update(board)
+    film = storage.path(service.run(run.id).path)
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", "0.7", "-i", str(film), "-frames:v", "1", "-f", "rawvideo",
+                          "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
+    frame = np.frombuffer(raw, dtype=np.uint8).reshape(360, 640, 3)
+    right, left = frame[120:180, 440:620], frame[120:180, 20:200]
+    assert (right.min(axis=2) > 200).any() and not (left.min(axis=2) > 200).any()   # white word on the right only
