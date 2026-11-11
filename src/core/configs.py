@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     lesson_model: str = Field(default="claude-opus-5-5", validation_alias="PIPELINE_LESSON_MODEL")
     storyboard_model: str = Field(default="claude-opus-5-5", validation_alias="PIPELINE_STORYBOARD_MODEL")
     sheet_model: str = Field(default="nano-banana-2.1", validation_alias="PIPELINE_SHEET_MODEL")
+    drawing_model: str = Field(default="nano-banana-2.1", validation_alias="PIPELINE_DRAWING_MODEL")
     host_model: str = Field(default="gpt-image-2", validation_alias="PIPELINE_HOST_MODEL")
     keyframe_model: str = Field(default="nano-banana-2.1", validation_alias="PIPELINE_KEYFRAME_MODEL")
     image_check_model: str = Field(default="claude-haiku-5-5", validation_alias="PIPELINE_IMAGE_CHECK_MODEL")

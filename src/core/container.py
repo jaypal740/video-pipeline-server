@@ -9,8 +9,12 @@ from src.repository.run.run_repository import RunRepository
 from src.repository.song.song_repository import SongRepository
 from src.service.assembly.assembly_service import AssemblyService
 from src.service.auth.auth_service import AuthService
+from src.service.drawing.drawing_service import DrawingService
 from src.service.image.fal_image_service import FalImageService
 from src.service.image.image_check_service import ImageCheckService
+from src.service.loop.loop_checks import LoopCutService
+from src.service.loop.loop_service import LoopService
+from src.service.render.render_service import RenderService
 from src.service.video.clip_checks import ClipCheckService
 from src.service.video.fal_video_service import FalVideoService
 from src.service.video.video_service import VideoService
@@ -75,6 +79,7 @@ class Container(containers.DeclarativeContainer):
                                             fallback_model=settings.provided.video_fallback_model)
     fal_lipsync_service = providers.Singleton(FalLipsyncService, api_key=settings.provided.fal_key)
     clip_check_service = providers.Singleton(ClipCheckService, ffmpeg=ffmpeg_service)
+    loop_cut_service = providers.Singleton(LoopCutService, ffmpeg=ffmpeg_service)
     image_check_service = providers.Singleton(ImageCheckService, llm=llm_service, settings=settings)
 
     # services
@@ -111,6 +116,36 @@ class Container(containers.DeclarativeContainer):
         storage=storage,
         images=fal_image_service,
         check=image_check_service,
+        settings=settings,
+    )
+    drawing_service = providers.Singleton(
+        DrawingService,
+        run_repository=run_repository,
+        asset_repository=asset_repository,
+        storage=storage,
+        images=fal_image_service,
+        check=image_check_service,
+        llm=llm_service,
+        settings=settings,
+    )
+    loop_service = providers.Singleton(
+        LoopService,
+        run_repository=run_repository,
+        asset_repository=asset_repository,
+        storage=storage,
+        video=fal_video_service,
+        cutter=loop_cut_service,
+        check=image_check_service,
+        llm=llm_service,
+        settings=settings,
+    )
+    render_service = providers.Singleton(
+        RenderService,
+        run_repository=run_repository,
+        song_repository=song_repository,
+        asset_repository=asset_repository,
+        storage=storage,
+        ffmpeg=ffmpeg_service,
         settings=settings,
     )
     keyframe_service = providers.Singleton(

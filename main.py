@@ -7,7 +7,7 @@ from src.core.container import Container
 from src.core.logging import configure_logging
 from src.core.database import create_tables
 from src.schema.enums import StageName
-from src.schema.lesson.lesson_schema import GradeBand, VideoType
+from src.schema.lesson.lesson_schema import GradeBand
 from src.schema.run.run_schema import Run
 from src.schema.song.song_schema import SongStatus
 from src.service.lesson.lesson_rules import band_for
@@ -142,15 +142,15 @@ def run_create(
 def run_lesson(
     run_id: str,
     model: str | None = typer.Option(None, "--model", help="Override the lesson model."),
-    video_type: VideoType | None = typer.Option(None, "--type", help="Ask for this video type."),
     force: bool = typer.Option(False, "--force", help="Plan again even if nothing changed."),
 ) -> None:
-    """Stage 2: what each line teaches and shows, and the video type for the run's grade band."""
-    plan = container.lesson_service().run(run_id, model=model, video_type=video_type, force=force)
-    typer.echo(f"{plan.topic} ({plan.subject}), grades {plan.grade_band}: {plan.video_type}. {plan.type_reason}")
+    """Stage 2: the teaching beats: what each part of the song teaches, its key word and when it is sung."""
+    plan = container.lesson_service().run(run_id, model=model, force=force)
+    typer.echo(f"{plan.topic} ({plan.subject}), grades {plan.grade_band}")
     typer.echo(f"terms: {', '.join(t.term for t in plan.key_terms)}")
-    for line in plan.lines:
-        typer.echo(f"  {line.index:3d}  {line.tag:14s}  {line.show[:90]}")
+    for beat in plan.beats:
+        typer.echo(f"  {beat.id}  {beat.start:6.1f}-{beat.end:6.1f}s  {beat.type:8s}  {beat.keyword or '-':16s}  "
+                   f"{beat.concept[:80]}")
 
 
 @run_app.command("storyboard")
@@ -159,16 +159,54 @@ def run_storyboard(
     model: str | None = typer.Option(None, "--model", help="Override the storyboard model."),
     force: bool = typer.Option(False, "--force", help="Board again even if nothing changed."),
 ) -> None:
-    """Stage 3: the shot list, cut on the beat, that the image and video models draw."""
+    """Stage 3: the animation script: the drawings the video needs and what they do in each beat."""
     board = container.storyboard_service().run(run_id, model=model, force=force)
-    typer.echo(f"{board.video_type}, grades {board.grade_band}: {board.shape}")
-    typer.echo(f"places: {', '.join(p.id for p in board.places)} | cast: {', '.join(c.id for c in board.cast)}")
-    for shot in board.shots:
-        cam = " ".join(str(v) for v in (shot.camera.move, shot.camera.direction, shot.camera.speed) if v)
-        typer.echo(f"  {shot.id} {shot.start:6.1f}-{shot.end:5.1f}  {shot.kind:10s} {shot.place:16s} {shot.size:13s} "
-                   f"{cam:18s} {shot.action[:60]}")
-    for flag in board.flags:
-        typer.echo(f"  note: {flag}")
+    typer.echo(f"grades {board.grade_band}: {board.style}")
+    typer.echo(f"palette: {' '.join(board.palette)} | performer: {board.performer or '-'}")
+    for d in board.drawings:
+        typer.echo(f"  {d.id:20s} {d.kind:10s} {d.look[:60]}" + (f" | moves: {d.motion}" if d.motion else ""))
+    for beat in board.beats:
+        typer.echo(f"  {beat.beat}  {beat.start:6.1f}-{beat.end:6.1f}s  {beat.type:8s}  {beat.background}")
+        for a in beat.actions:
+            what = " ".join(str(v) for v in (a.drawing, f"to {a.to}" if a.to else None, a.pos, a.scale, a.text) if v)
+            typer.echo(f"      {a.at:6.1f}{f'-{a.until:.1f}' if a.until is not None else '':7s} {a.verb:10s} {what}")
+
+
+@run_app.command("drawings")
+def run_drawings(
+    run_id: str,
+    until: float | None = typer.Option(None, "--until", help="Only the drawings needed before this second of the song."),
+    force: bool = typer.Option(False, "--force", help="Draw again even if nothing changed."),
+) -> None:
+    """Stage 4: every drawing of the animation script, drawn once in the band's style, cut out and checked."""
+    made = container.drawing_service().run(run_id, until=until, force=force)
+    for name, asset in made.items():
+        typer.echo(f"  {name:26s} {asset.review:10s} try {asset.params.get('try', 1)}  {asset.params.get('cut') or asset.path}"
+                   + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
+
+
+@run_app.command("loops")
+def run_loops(
+    run_id: str,
+    until: float | None = typer.Option(None, "--until", help="Only the loops needed before this second of the song."),
+    force: bool = typer.Option(False, "--force", help="Animate again even if nothing changed."),
+) -> None:
+    """Stage 5: every drawing that has a motion, animated once into a short loop, cut out and checked."""
+    made = container.loop_service().run(run_id, until=until, force=force)
+    for name, asset in made.items():
+        typer.echo(f"  {name:26s} {asset.review:10s} try {asset.params.get('try', 1)}  {asset.params.get('cut') or asset.path}"
+                   + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
+
+
+@run_app.command("render")
+def run_render(
+    run_id: str,
+    until: float | None = typer.Option(None, "--until", help="Only the beats that start before this second of the song."),
+    force: bool = typer.Option(False, "--force", help="Render again even if nothing changed."),
+) -> None:
+    """Stage 6: the script played by code from the drawings and loops, as one film with the song under it."""
+    film = container.render_service().run(run_id, until=until, force=force)
+    typer.echo(f"  {film.params['seconds']:.1f} s, {film.params['frames']} frames  {film.path}")
 
 
 @run_app.command("sheets")

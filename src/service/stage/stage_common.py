@@ -9,6 +9,7 @@ from src.schema.base_schema import utcnow
 from src.schema.enums import StageName, StageStatus
 from src.schema.image.image_check_schema import Brief, Correction
 from src.schema.run.stage_state_schema import StageState
+from src.schema.storyboard.script_schema import AnimationScript
 from src.schema.storyboard.storyboard_schema import Storyboard
 from src.service.keyframe.keyframe_prompt import CORRECTION, check_correction, correction_request
 from src.service.llm.llm_service import LlmCall, LlmError, LlmService
@@ -27,6 +28,13 @@ def storyboard_of(runs: RunRepository, run_id: str) -> Storyboard:
     if state is None or state.status != StageStatus.DONE:
         raise ValueError(f"Run {run_id} has no storyboard; run the storyboard stage first")
     return Storyboard(**state.output)
+
+
+def script_of(runs: RunRepository, run_id: str) -> AnimationScript:
+    state = runs.stage(run_id, StageName.STORYBOARD)
+    if state is None or state.status != StageStatus.DONE:
+        raise ValueError(f"Run {run_id} has no animation script; run the storyboard stage first")
+    return AnimationScript(**state.output)
 
 
 def asset_url(storage: Storage, upload, asset: Asset) -> str:

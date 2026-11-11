@@ -7,6 +7,8 @@ class StageName(StrEnum):
     BEATS = "beats"
     STORYBOARD = "storyboard"
     VISUAL_IDENTITY = "visual_identity"
+    LOOPS = "loops"
+    RENDER = "render"
     KEYFRAMES = "keyframes"
     VIDEO = "video"
     LIPSYNC = "lipsync"
