@@ -19,6 +19,7 @@ from src.service.image.image_check_service import ImageCheckService
 from src.service.llm.llm_service import LabelledImage, LlmCall, LlmService
 from src.service.loop.loop_checks import LoopCheck, LoopCutService
 from src.service.loop.loop_prompt import LOOP_SECONDS, loop_brief, loop_prompt
+from src.service.render.film_check_service import film_key
 from src.service.stage.stage_common import add_cost, add_llm_cost, asset_url, fail_stage, script_of, write_correction
 from src.service.storage.storage_service import Storage
 from src.service.video.fal_video_service import FalVideoService, VideoReply
@@ -32,7 +33,8 @@ USABLE = (ReviewState.PASSED, ReviewState.APPROVED, ReviewState.USED_BEST)
 class LoopService:
     """Stage 5: every drawing that has a motion, animated once into a short loop the render repeats. The
     video model draws from the drawing back to the same drawing, still on the key colour, so each frame is
-    cut out the way the drawing was. Code checks that every frame cuts out, that the loop ends as it began
+    cut out the way the drawing was. No loop is made until the film check has passed this script with these
+    drawings. Code checks that every frame cuts out, that the loop ends as it began
     and that something moves; the judge checks the frame furthest from the drawing against the drawing. A
     loop that fails is made again on a new seed, told what the checks found wrong; when that fails too the
     better try is used (used_best). Only a drawing no loop of which could be cut out fails the stage. A
@@ -67,6 +69,10 @@ class LoopService:
         if state is not None and not force and state.status == StageStatus.DONE and state.input_hash == key:
             logger.info("loops %s: reused, inputs unchanged", run_id[:8])
             return {name: self._assets.assets.get(a) for name, a in state.output["loops"].items()}
+        check, drawn = self._runs.stage(run_id, StageName.QC), self._runs.stage(run_id, StageName.VISUAL_IDENTITY)
+        if check is None or check.status != StageStatus.DONE or check.input_hash != film_key(board, drawn.output["drawings"]):
+            raise ValueError(f"Run {run_id}'s film has not passed its check with this script and these drawings; run the "
+                             "check stage first" + (f". It found: {check.error}" if check and check.error else ""))
         state = state or self._runs.stage_states.add(StageState(run_id=run_id, stage=STAGE))
         state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
         state.input_hash, state.started_at, state.finished_at = key, utcnow(), None

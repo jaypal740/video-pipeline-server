@@ -15,7 +15,8 @@ from src.schema.lesson.lesson_schema import LessonPlan
 from src.schema.run.stage_state_schema import StageState
 from src.schema.storyboard.script_schema import AnimationScript, Drawing, DrawingKind
 from src.service.drawing.cutout import cut_out
-from src.service.drawing.drawing_prompt import aspect_of, drawing_brief, drawing_prompt, must_not_show, reference_of
+from src.service.drawing.drawing_prompt import (TRUE, aspect_of, drawing_brief, drawing_prompt, must_not_show,
+                                                reference_of, taught_with)
 from src.service.image.fal_image_service import RESOLUTION, FalImageService, ImageReply
 from src.service.image.image_check_service import ImageCheckService
 from src.service.llm.llm_service import LabelledImage, LlmCall, LlmService
@@ -33,9 +34,10 @@ class DrawingService:
     else is drawn alone on the key colour and cut out by code. The performer's lead drawing is drawn first
     and attached to its other drawings, and a pose is drawn from the drawing it is a pose of, so one thing
     looks the same everywhere. Each drawing is checked by code as a cut-out and by the judge against its
-    look. One that fails is drawn again on a new seed, told what the check found wrong; when that fails too
-    the better-scoring try is used (used_best). Only a drawing no try of which could be cut out fails the
-    stage. A re-run with the same script reuses the stored drawings."""
+    look and what its own beats teach. One that fails is drawn again on a new seed, told what the check found
+    wrong, up to drawing_max_tries draws. When none passes, the best try is used (used_best) only if it
+    scored the pass mark and is true to the real thing; otherwise the drawing fails and so does the stage,
+    before any loop is made from it. A re-run with the same script reuses the stored drawings."""
 
     def __init__(self, run_repository: RunRepository, asset_repository: AssetRepository, storage: Storage,
                  images: FalImageService, check: ImageCheckService, llm: LlmService, settings: Settings) -> None:
@@ -52,7 +54,8 @@ class DrawingService:
         if self._runs.runs.get(run_id) is None:
             raise LookupError(f"Run {run_id} not found")
         board = script_of(self._runs, run_id)
-        avoid = {b.id: b.avoid for b in LessonPlan(**self._runs.stage(run_id, StageName.LESSON).output).beats}
+        plan = LessonPlan(**self._runs.stage(run_id, StageName.LESSON).output)
+        avoid, taught = {b.id: b.avoid for b in plan.beats}, {b.id: b.concept for b in plan.beats}
         todo = _wanted(board, until)
         refs = {d.id: reference_of(board, d) for d in todo}
         model = self._settings.drawing_model
@@ -72,7 +75,7 @@ class DrawingService:
         made: dict[str, Asset] = {}
         try:
             for level in _levels(todo, refs):
-                assets = self._draw_all(run_id, model, board, level, refs, made, avoid)
+                assets = self._draw_all(run_id, model, board, level, refs, made, avoid, taught)
                 made.update(zip((d.id for d in level), assets))
                 if any(a.review == ReviewState.FAILED for a in assets):     # nothing is drawn from a failed drawing
                     break
@@ -95,11 +98,12 @@ class DrawingService:
         return made
 
     def _draw_all(self, run_id: str, model: str, board: AnimationScript, level: list[Drawing],
-                  refs: dict[str, Drawing | None], made: dict[str, Asset], avoid: dict[str, str]) -> list[Asset]:
+                  refs: dict[str, Drawing | None], made: dict[str, Asset], avoid: dict[str, str],
+                  taught: dict[str, str]) -> list[Asset]:
         """One round of drawings. A picture drawn before with the same prompt, reference and seed is reused,
         when a try of it passed and it still cuts out; the rest are drawn and checked side by side, then
         stored here, on one thread, with their costs."""
-        max_tries, jobs, out = self._settings.image_max_tries, [], {}
+        max_tries, jobs, out = self._settings.drawing_max_tries, [], {}
         for d in level:
             ref = [made[refs[d.id].id]] if refs[d.id] else []
             prompt, aspect = drawing_prompt(board, d, refs[d.id]), aspect_of(d)
@@ -119,7 +123,8 @@ class DrawingService:
                     cost_usd=0.0, review=ReviewState.PASSED))
             else:
                 jobs.append((d, prompt, aspect, ref, base, keys))
-        attempt = lambda job: self._tries(model, drawing_brief(board, job[0], must_not_show(board, job[0], avoid)), *job)
+        attempt = lambda job: self._tries(
+            model, drawing_brief(board, job[0], must_not_show(board, job[0], avoid), taught_with(board, job[0], taught)), *job)
         with ThreadPoolExecutor(max_workers=self._settings.image_workers) as pool:
             drawn = list(pool.map(attempt, jobs))
         for (d, _, aspect, ref, _, _), tries in zip(jobs, drawn):
@@ -132,8 +137,10 @@ class DrawingService:
         correction written from what the last try's checks found. Runs beside other drawings, so it only
         calls the models; nothing is stored here."""
         ref_urls = [asset_url(self._storage, self._images.upload, r) for r in ref]
-        labelled = [LabelledImage(label=f"reference: the drawing {r.target_id}", data=self._storage.get(r.path))
-                    for r in ref if drawing.of]                 # the judge compares a pose only with what it is a pose of
+        about = (lambda r: f"reference: the drawing {r.target_id}") if drawing.of else (
+            lambda r: f"the drawing {r.target_id}: the same character, shown so you can tell whether the picture to "
+                      "check kept anything of it that its own description does not ask for")
+        labelled = [LabelledImage(label=about(r), data=self._storage.get(r.path)) for r in ref]
         tries, correction, fix = [], None, None
         for n, key in enumerate(keys):
             drawn = f"{prompt} {correction}" if correction else prompt
@@ -159,8 +166,8 @@ class DrawingService:
 
     def _keep(self, run_id: str, drawing: Drawing, aspect: str, ref: list[Asset], tries: list["Try"]) -> Asset:
         """Store every try under its own file, with its cut-out beside it, and say which one the video uses:
-        the try that passed; else the better-scoring one, the later on a tie (used_best); else none, when no
-        try could be cut out, and the drawing has failed."""
+        the try that passed; else the best-scoring one, the later on a tie, when it scored the pass mark and
+        is true to the real thing (used_best); else none, and the drawing has failed."""
         assets = []
         for t in tries:
             asset_id = new_id()
@@ -187,8 +194,9 @@ class DrawingService:
         if assets[-1].review == ReviewState.PASSED:
             logger.info("drawing %s: passed on try %d", drawing.id, len(assets))
             return assets[-1]
-        judged, best = max(zip(tries, assets), key=lambda pair: (pair[0].check is not None, pair[0].score, pair[0].attempt))
-        if judged.check is not None:                            # it could be cut out, so it can be used
+        true = lambda t: t.check is not None and not any(p.startswith(TRUE) for p in t.problems)
+        judged, best = max(zip(tries, assets), key=lambda pair: (true(pair[0]), pair[0].score, pair[0].attempt))
+        if true(judged) and judged.score >= self._settings.image_pass_score:        # it failed only a rule of tidiness
             best.review = ReviewState.USED_BEST
             self._assets.assets.update(best)
             logger.warning("drawing %s: no try passed; using the best, %d/10", drawing.id, best.params["score"])

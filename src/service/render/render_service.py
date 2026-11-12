@@ -16,6 +16,7 @@ from src.schema.asset.asset_schema import Asset, ReviewState
 from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.run.stage_state_schema import StageState
+from src.schema.storyboard.script_schema import DrawingKind
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.render.painter import Painter
 from src.service.render.timeline import frame_at, scenes_of
@@ -25,7 +26,7 @@ from src.service.storage.storage_service import Storage
 logger = logging.getLogger(__name__)
 
 STAGE = StageName.RENDER
-VERSION = "render.v3"       # part of the stage's inputs: raise it when the same script should paint differently
+VERSION = "render.v6"       # part of the stage's inputs: raise it when the same script should paint differently
 USABLE = (ReviewState.PASSED, ReviewState.APPROVED, ReviewState.USED_BEST)
 SPRITE_PX = 640             # a drawing's square is kept at this size; on screen it is drawn smaller than this
 
@@ -107,6 +108,22 @@ class RenderService:
         logger.info("render %s: done, %s, %.1f MB, %.0fs", run_id[:8], path, len(data) / 1e6,
                     (state.finished_at - state.started_at).total_seconds())
         return asset
+
+    def stills(self, run_id: str, times: list[float], height: int) -> list[Image.Image]:
+        """Those seconds of the film painted from the drawings alone, `height` pixels tall, each drawing
+        holding still where its loop will play: what the film will show, before any loop is paid for."""
+        board = script_of(self._runs, run_id)
+        wide = self._settings.assembly_width / self._settings.assembly_height
+        scenes = scenes_of(board, board.beats, wide)
+        drawn = self._chosen(run_id, StageName.VISUAL_IDENTITY, "drawings")
+        shown = {s.background for s in scenes} | {t.drawing for s in scenes for t in s.tracks}
+        if missing := sorted(shown - drawn.keys()):
+            raise ValueError(f"Run {run_id} has no usable drawing for {', '.join(missing)}; run the drawings stage first")
+        backs = {d.id for d in board.drawings if d.kind == DrawingKind.BACKGROUND}
+        painter = Painter(round(height * wide), height, self._settings.assembly_fps,
+                          {n: self._picture(drawn[n].path) for n in shown & backs},
+                          {n: self._picture(drawn[n].params["cut"]) for n in shown - backs}, {})
+        return [painter.paint(frame_at(scenes, t, wide)) for t in times]
 
     def _chosen(self, run_id: str, stage: StageName, what: str) -> dict[str, Asset]:
         """The usable drawings or loops a stage chose for the run."""

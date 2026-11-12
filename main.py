@@ -170,6 +170,7 @@ def run_storyboard(
         for a in beat.actions:
             what = " ".join(str(v) for v in (a.drawing, f"to {a.to}" if a.to else None, a.pos, a.scale, a.text) if v)
             typer.echo(f"      {a.at:6.1f}{f'-{a.until:.1f}' if a.until is not None else '':7s} {a.verb:10s} {what}")
+    typer.echo(f"review: {len(board.gaps)} gaps left" + "".join(f"\n  - {g}" for g in board.gaps))
 
 
 @run_app.command("drawings")
@@ -183,6 +184,19 @@ def run_drawings(
     for name, asset in made.items():
         typer.echo(f"  {name:26s} {asset.review:10s} try {asset.params.get('try', 1)}  {asset.params.get('cut') or asset.path}"
                    + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
+
+
+@run_app.command("check")
+def run_check(
+    run_id: str,
+    accept: bool = typer.Option(False, "--accept", help="The findings have been read; let the film go on as it is."),
+    force: bool = typer.Option(False, "--force", help="Check again even if nothing changed."),
+) -> None:
+    """Between drawings and loops: the film put together from the still drawings and judged against the lesson."""
+    problems = container.film_check_service().run(run_id, accept=accept, force=force)
+    for p in problems:
+        typer.echo(f"  {p.at:6.1f} s  {p.kind:14s} {p.what}")
+    typer.echo(f"  {len(problems)} problems" + (", accepted" if problems and accept else ""))
 
 
 @run_app.command("loops")

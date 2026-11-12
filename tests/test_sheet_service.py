@@ -85,7 +85,7 @@ class FakeVision:
         return ProviderReply(output=Correction(text="Show the operator in a red waistcoat."), model=model,
                              input_tokens=500, output_tokens=30, cost_usd=0.0005)
 
-    def inspect(self, model, system, user, images, output_type):
+    def inspect(self, model, system, user, images, output_type, effort):
         self.seen.append((user, [i.label for i in images]))
         if output_type is Fill:                                 # a follow-up: answer only the rules asked for
             asked = [line.split(". ", 1)[1] for line in user.split("leave every other field empty:\n", 1)[1].splitlines()

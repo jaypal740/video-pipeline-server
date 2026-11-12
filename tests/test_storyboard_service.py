@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from dependency_injector import providers
 
@@ -8,7 +10,9 @@ from src.schema.run.run_schema import Run
 from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_analysis_schema import LyricLine, SongAnalysis, TimedWord
 from src.schema.song.song_schema import Song, SongStatus
+from src.service.intake.intake_jamwise import JAMWISE_FILE
 from src.service.llm.llm_service import LlmError, ProviderReply
+from src.service.storyboard.script_prompt import jamwise_pictures
 
 LINES = [LyricLine(index=i, text=t, start=i * 4, end=i * 4 + 3.8, confidence=0.9)
          for i, t in enumerate(["This is a colony.", "In 1858 it grew.", "Sing it with me."])]
@@ -73,7 +77,7 @@ def storyboard(container: Container, claude: FakeClaude):
 
 
 def test_a_script_is_written_checked_finished_stored_and_costed(container, run):
-    claude = FakeClaude(drawings(), scripts())
+    claude = FakeClaude(drawings(), scripts(), {"gaps": []})
     board = storyboard(container, claude).run(run.id)
     assert board.style.startswith("A bold 2D cartoon") and board.performer == "Dot, a round teal bacterium"
     assert [d.id for d in board.drawings] == ["bench", "colony", "colony_big", "dot"]       # unused ones are dropped
@@ -89,21 +93,108 @@ def test_a_script_is_written_checked_finished_stored_and_costed(container, run):
     assert "On screen when b01 starts: nothing." in claude.prompts[1]
     state = container.run_repository().stage(run.id, StageName.STORYBOARD)
     assert state.status == StageStatus.DONE and state.output["beats"][2]["actions"][1]["verb"] == "lipsync"
-    assert container.asset_repository().run_cost(run.id) == pytest.approx(0.10)
+    assert "Script:\nb01 bench: show colony center @0; keyword colony @2-4" in claude.prompts[2] and board.gaps == []
+    assert container.asset_repository().run_cost(run.id) == pytest.approx(0.15)
+
+
+def repair(to="colony_huge", **more):
+    return {"drawings": [{"id": "colony_huge", "kind": "object", "look": "A huge teal colony", "of": "colony",
+                          "motion": "slowly spreads"}],
+            "beats": [{"beat": "b02", "background": "bench", "actions": [
+                {"verb": "swap", "drawing": "colony", "to": to, "at": 5}]}], **more}
+
+
+def test_only_the_beats_a_review_names_are_repaired_and_the_script_is_reviewed_again(container, run):
+    gap = "b02: the colony is not shown huge; swap colony for a huge colony"
+    claude = FakeClaude(drawings(), scripts(), {"gaps": [gap]}, repair(to="nothing"), repair(), {"gaps": []})
+    board = storyboard(container, claude).run(run.id)
+    assert f"Gaps:\n- {gap}" in claude.prompts[3] and "Script:\nb01 bench: show colony center @0\nb02" in claude.prompts[3]
+    assert "b02 swap at 5: to 'nothing' must be a listed" in claude.prompts[4]                # a repair is checked too
+    assert "b02 bench: swap colony to colony_huge @5" in claude.prompts[5] and board.gaps == []
+    assert [d.id for d in board.drawings] == ["bench", "colony", "dot", "colony_huge"]
+    assert [(a.verb, a.to or a.text or a.drawing) for a in board.beats[1].actions] == [("swap", "colony_huge"), ("number", "1858")]
+    assert board.beats[0].actions[0].drawing == "colony" and board.beats[2].actions[1].verb == "lipsync"   # the rest is as it was
+    assert container.asset_repository().run_cost(run.id) == pytest.approx(0.30)
+
+
+def test_a_finished_script_is_repaired_again_for_what_a_later_check_finds_in_the_film(container, run):
+    claude = FakeClaude(drawings(), scripts(), {"gaps": []}, repair(to="nothing"), repair())
+    service = storyboard(container, claude)
+    service.run(run.id)
+    found = "b02: at 5.4 s the film shows this: the colony is no bigger than before."
+    board = service.repair(run.id, [found])
+    assert f"Gaps:\n- {found}" in claude.prompts[3] and "b02 bench: swap colony to colony_big @5\n" in claude.prompts[3]
+    assert "b02 swap at 5: to 'nothing' must be a listed" in claude.prompts[4]               # checked like any repair
+    assert [d.id for d in board.drawings] == ["bench", "colony", "dot", "colony_huge"]
+    assert [(a.verb, a.to or a.text or a.drawing) for a in board.beats[1].actions] == [("swap", "colony_huge"), ("number", "1858")]
+    assert board.beats[2].actions[1].verb == "lipsync"                                       # code's actions are added afresh
+    assert service.run(run.id) == board and claude.replies == []                             # the stage reuses the repaired script
+    assert container.asset_repository().run_cost(run.id) == pytest.approx(0.25)
+    first = service.run(run.id, force=False).model_copy(update={"gaps": ["kept"]})
+    service.restore(run.id, first)
+    assert service.run(run.id).gaps == ["kept"]
+
+
+def test_a_script_gets_two_tries_and_gaps_that_stay_do_not_stop_the_stage(container, run):
+    gap, bad = "b02: x", repair(to="nothing")
+    claude = FakeClaude(drawings(), scripts(), {"gaps": [gap]}, repair(), {"gaps": [gap, "b03: y"]},     # worse: dropped
+                        drawings(), scripts(), {"gaps": [gap]}, repair(), {"gaps": [gap]},              # a tie: the repaired one
+                        drawings(), scripts(), {"gaps": [gap]}, bad, bad, bad)                          # no usable repair
+    service = storyboard(container, claude)
+    board = service.run(run.id)
+    assert board.gaps == [gap] and len(claude.prompts) == 5 and "colony_huge" not in [d.id for d in board.drawings]
+    assert "colony_huge" in [d.id for d in service.run(run.id, force=True).drawings] and len(claude.prompts) == 10
+    again = service.run(run.id, force=True)
+    assert again.gaps == [gap] and claude.replies == [] and "colony_huge" not in [d.id for d in again.drawings]
+    assert container.run_repository().stage(run.id, StageName.STORYBOARD).status == StageStatus.DONE
+
+
+def test_the_script_is_given_jamwises_own_pictures(container, run, tmp_path):
+    export = {"creativeBrief": {
+        "scenes": [{"id": 2, "title": "The Munch", "teaches": "Caterpillars molt to grow", "place": "a giant leaf",
+                    "teachingMoment": {"visualDemonstration": "One molt"}}, {"id": 3, "title": "Mood only"}],
+        "teachingMoments": [{"sceneId": 2, "visualDemonstration": "Three molts, bigger each time"}],
+        "visualWorld": {"chorusVisual": "All four stages", "primarySetting": "A meadow garden"},
+        "loopVisual": "The first egg again",
+        "numberAnchors": [{"statistic": "4 stages", "visual": "Each lights up"}],
+        "sectionPlans": [{"section": "chorus", "keyMoments": ["Identical to opening chorus"]}, {"section": "verse1"}]}}
+    text = jamwise_pictures(export)
+    for part in ("- Scene 2, The Munch, set in a giant leaf: teaches Caterpillars molt to grow. Shown as: Three molts, "
+                 "bigger each time", "- The world: A meadow garden", "- Chorus picture: All four stages", "- 4 stages: Each lights up",
+                 "- Section chorus: Identical to opening chorus", "- Ending: The first egg again"):
+        assert part in text
+    assert "Mood only" not in text and "verse1" not in text and jamwise_pictures({}) is None
+    songs = container.song_repository()
+    song = songs.songs.get(run.song_id)
+    song.audio_path = str(tmp_path / "a.mp3")
+    songs.songs.update(song)
+    (tmp_path / JAMWISE_FILE).write_text(json.dumps({"result": {"lyrics": "x", "lineTiming": [{}], **export}}))
+    claude = FakeClaude(drawings(), scripts(), {"gaps": []})
+    storyboard(container, claude).run(run.id)
+    assert all("Shown as: Three molts, bigger each time" in p and p.index("Shown as") < p.index("Beats:") for p in claude.prompts)
 
 
 def test_a_script_that_breaks_the_rules_is_re_asked(container, run):
-    claude = FakeClaude(drawings(), scripts(first_show="dish"), scripts())
+    claude = FakeClaude(drawings(), scripts(first_show="dish"), scripts(), {"gaps": []})
     board = storyboard(container, claude).run(run.id)
     assert "b01: nothing really moves" in claude.prompts[2] and "b02 swap at 5: colony is not on screen" in claude.prompts[2]
     assert board.beats[0].actions[0].drawing == "colony"
-    assert container.asset_repository().run_cost(run.id) == pytest.approx(0.15)
+    assert container.asset_repository().run_cost(run.id) == pytest.approx(0.20)
+
+
+def test_a_script_in_which_one_drawing_hides_another_is_re_asked(container, run):
+    stacked = scripts()
+    stacked["beats"][2]["actions"][0]["pos"] = "top"            # the singer over the colony at center
+    claude = FakeClaude(drawings(), stacked, scripts(), {"gaps": []})
+    board = storyboard(container, claude).run(run.id)
+    assert "b03: from 8.25 dot covers colony_big; nothing may hide another drawing" in claude.prompts[2]
+    assert board.beats[2].actions[0].pos == "left"
 
 
 def test_later_beats_are_told_what_is_on_screen_and_what_was_scripted(container, run, monkeypatch):
     monkeypatch.setattr("src.service.storyboard.storyboard_service.BEATS_PER_CALL", 2)
     both = scripts()["beats"]
-    claude = FakeClaude(drawings(), {"beats": both[:2]}, {"beats": both[2:]})
+    claude = FakeClaude(drawings(), {"beats": both[:2]}, {"beats": both[2:]}, {"gaps": []})
     storyboard(container, claude).run(run.id)
     assert "Write the scripts for beats b01 to b02." in claude.prompts[1]
     assert "On screen when b03 starts: bench with colony_big at center." in claude.prompts[2]
@@ -111,12 +202,12 @@ def test_later_beats_are_told_what_is_on_screen_and_what_was_scripted(container,
 
 
 def test_the_same_inputs_reuse_the_stored_script_unless_forced(container, run):
-    claude = FakeClaude(drawings(), scripts(), drawings(spare=False), scripts())
+    claude = FakeClaude(drawings(), scripts(), {"gaps": []}, drawings(spare=False), scripts(), {"gaps": []})
     service = storyboard(container, claude)
     service.run(run.id)
-    assert len(service.run(run.id).drawings) == 4 and len(claude.prompts) == 2
+    assert len(service.run(run.id).drawings) == 4 and len(claude.prompts) == 3
     service.run(run.id, force=True)
-    assert len(claude.prompts) == 4
+    assert len(claude.prompts) == 6
 
 
 def test_a_script_that_never_passes_fails_the_stage_and_keeps_what_was_written(container, run):

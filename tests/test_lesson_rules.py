@@ -132,11 +132,18 @@ def test_the_jamwise_plan_gives_the_lesson_its_facts_terms_and_demonstrations():
         "vocabularyCards": [{"term": "corona", "kidDefinition": "The Sun's outer layer.", "nonExamples": ["sunspot"]}],
         "wowFact": {"fact": "So much energy."}},
         "creativeBrief": {"teachingMoments": [{"concept": "Fusion vs burning", "visualDemonstration": "Candle beside it"}],
+                          "sectionPlans": [{"section": "chorus", "educationalFocus": "Layers named",
+                                            "keyMoments": ["Identical to opening chorus"]}],
+                          "numberAnchors": [{"statistic": "Four layers", "visual": "Each lights up in turn"}],
+                          "visualWorld": {"chorusVisual": "The layers one by one"}, "loopVisual": "Back to the first shot",
                           "featuredTerms": [{"word": "corona"}]}}
     text = jamwise_direction(export)
     for part in ("- Learning goal: Explain fusion", "- Fact: The Sun is a ball of gas. Gravity holds it.",
                  "- Wrong idea to avoid: It burns like a campfire.",
                  "- Term corona: The Sun's outer layer. Not to be confused with: sunspot",
                  "- How to show Fusion vs burning: Candle beside it", "- Wow fact: So much energy.",
+                 "- Section chorus: Layers named Key moments: Identical to opening chorus",
+                 "- Number: Four layers Shown as: Each lights up in turn",
+                 "- How to show the chorus: The layers one by one", "- How the video ends: Back to the first shot",
                  "- Featured terms: corona"):
         assert part in text

@@ -14,6 +14,7 @@ from src.service.image.fal_image_service import FalImageService
 from src.service.image.image_check_service import ImageCheckService
 from src.service.loop.loop_checks import LoopCutService
 from src.service.loop.loop_service import LoopService
+from src.service.render.film_check_service import FilmCheckService
 from src.service.render.render_service import RenderService
 from src.service.video.clip_checks import ClipCheckService
 from src.service.video.fal_video_service import FalVideoService
@@ -146,6 +147,17 @@ class Container(containers.DeclarativeContainer):
         asset_repository=asset_repository,
         storage=storage,
         ffmpeg=ffmpeg_service,
+        settings=settings,
+    )
+    film_check_service = providers.Singleton(
+        FilmCheckService,
+        run_repository=run_repository,
+        song_repository=song_repository,
+        asset_repository=asset_repository,
+        render=render_service,
+        storyboard=storyboard_service,
+        drawings=drawing_service,
+        llm=llm_service,
         settings=settings,
     )
     keyframe_service = providers.Singleton(

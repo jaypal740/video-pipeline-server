@@ -15,7 +15,8 @@ from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_schema import Song
 from src.schema.storyboard.script_schema import AnimationScript
 from src.service.drawing.cutout import KEY, cut, cut_out
-from src.service.drawing.drawing_prompt import drawing_brief, drawing_prompt, lead, must_not_show, reference_of
+from src.service.drawing.drawing_prompt import (TRUE, drawing_brief, drawing_prompt, lead, must_not_show, taught_with,
+                                                reference_of)
 from src.service.image.fal_image_service import ImageReply
 from src.service.llm.llm_service import ProviderReply
 from src.service.storage.storage_service import LocalStorage
@@ -78,25 +79,26 @@ class FakeFal:
 
 
 class FakeVision:
-    """The judge: passes every picture, except the first `fail_first` checks. It also writes the correction
-    a retry is drawn with."""
+    """The judge: passes every picture, except the first `fail_first` checks, and says no to every rule that
+    starts with `no`. It also writes the correction a retry is drawn with."""
 
     name = "anthropic"
 
     def __init__(self):
-        self.seen, self.fail_first, self.asked = [], 0, []
+        self.seen, self.fail_first, self.asked, self.no = [], 0, [], None
 
     def parse(self, model, system, user, output_type, effort):
         self.asked.append(user)
         return ProviderReply(output=Correction(text="Its arms are held out wide."), model=model, input_tokens=400,
                              output_tokens=20, cost_usd=0.0005)
 
-    def inspect(self, model, system, user, images, output_type):
+    def inspect(self, model, system, user, images, output_type, effort):
         self.seen.append((user, [i.label for i in images]))
         rules = [line.split(". ", 1)[1] for line in user.split("Rules:\n", 1)[1].splitlines() if line.strip()]
         score = 3 if len(self.seen) <= self.fail_first else 9
         return ProviderReply(output=Checklist(asked_for=[], score=score, score_reason="as seen",
-                                              answers=[Answer(rule=r, ok=True, reason="") for r in rules]),
+                                              answers=[Answer(rule=r, ok=not (self.no and r.startswith(self.no)),
+                                                              reason="") for r in rules]),
                              model=model, input_tokens=6000, output_tokens=200, cost_usd=0.001)
 
 
@@ -153,6 +155,8 @@ def test_a_cut_out_is_asked_for_on_the_key_colour_and_a_backdrop_fills_the_frame
                           "In this drawing: Arms wide. Its face is turned to the viewer")
     assert "flat solid pure magenta (#FF00FF)" in cut and "#12A594, #F2F2F2" in cut and "Image 1" not in cut
     assert "Image 1 shows the same subject" in drawing_prompt(SCRIPT, BY_ID["dish_full"], BY_ID["dish"])
+    other = drawing_prompt(SCRIPT, BY_ID["dot_small"], BY_ID["dot"])                       # the performer in another form
+    assert "exactly as this drawing describes them" in other and "Image 1 shows the same subject" not in other
     back = drawing_prompt(SCRIPT, BY_ID["bench"], None)
     assert "full-frame backdrop" in back and "magenta" not in back
     assert "no cartoon face" in drawing_prompt(SCRIPT, BY_ID["dish"], None)
@@ -182,6 +186,19 @@ def test_the_judge_is_told_one_drawings_look_and_what_its_beats_forbid_not_the_w
     assert "bacterium" not in told and "wrong ideas" not in drawing_brief(SCRIPT, BY_ID["dot_small"]).description
 
 
+def test_the_judge_holds_a_drawing_true_to_what_its_own_beats_teach_not_to_the_lessons_topic():
+    concepts = {"b01": "One germ is tiny.", "b02": "Germs grow into colonies."}
+    assert taught_with(SCRIPT, BY_ID["dot_point"], concepts) == ["One germ is tiny", "Germs grow into colonies"]
+    assert taught_with(SCRIPT, BY_ID["dish_full"], concepts) == ["Germs grow into colonies"]
+    brief = drawing_brief(SCRIPT, BY_ID["dish_full"], None, ["Germs grow into colonies"])
+    assert brief.fatal[-1] == f"{TRUE}. While it is on screen the song teaches: Germs grow into colonies"
+    assert brief.fatal[-1] in brief.rules
+    assert "the song teaches" not in brief.description          # the picture is scored against its own look alone
+    for other in ("bench", "arrow"):                            # a backdrop and a symbol teach no body
+        assert taught_with(SCRIPT, BY_ID[other], concepts) == []
+        assert not any(r.startswith(TRUE) for r in drawing_brief(SCRIPT, BY_ID[other], None, ["x"]).rules)
+
+
 def test_every_drawing_is_drawn_once_cut_out_checked_stored_and_costed(container, stage):
     service, fal, vision, run = stage
     made = service.run(run.id)
@@ -190,7 +207,9 @@ def test_every_drawing_is_drawn_once_cut_out_checked_stored_and_costed(container
     assert [refs for _, refs in fal.calls] == [0, 0, 0, 0, 1, 1, 1]
     seen = [labels for _, labels in vision.seen]
     assert ["the picture to check", "reference: the drawing dish"] in seen                # dish_full is a pose of dish
-    assert sum(len(labels) == 2 for labels in seen) == 2                                   # dot_small is no pose of dot
+    assert sum(labels[-1].startswith("reference: the drawing") for labels in seen) == 2
+    assert sum(labels[-1].startswith("the drawing dot: the same character, shown so") for labels in seen) == 1
+    assert all(TRUE in user for user, labels in vision.seen if len(labels) == 2)
     assert sum("wrong ideas: One giant germ; A dish with no colonies." in user for user, _ in vision.seen) == 2
     storage = container.storage()
     assert made["bench"].params["cut"] is None
@@ -237,15 +256,28 @@ def test_a_drawing_the_judge_fails_is_drawn_again_told_what_was_wrong(container,
     assert container.asset_repository().run_cost(run.id) == pytest.approx(5 * 0.045 + 0.0005)
 
 
-def test_when_the_corrected_draw_fails_too_the_better_try_is_used_and_the_stage_goes_on(container, stage):
+def test_a_drawing_that_scores_low_on_all_three_draws_is_never_used_and_the_stage_stops_there(container, stage):
     service, fal, vision, run = stage
     vision.fail_first = 99
     made = service.run(run.id)
-    assert len(made) == 7 and len(fal.calls) == 14             # nothing is held back: every drawing has a picture
-    assert all(a.review == ReviewState.USED_BEST and a.params["try"] == 2 for a in made.values())   # a tie: the corrected one
+    assert len(made) == 4 and len(fal.calls) == 12             # three draws each, and nothing is drawn from them
+    assert all(a.review == ReviewState.FAILED and a.params["try"] == 3 for a in made.values())
     state = container.run_repository().stage(run.id, StageName.VISUAL_IDENTITY)
-    assert state.status == StageStatus.DONE and sorted(state.output["used_best"]) == sorted(made)
-    assert len(service.run(run.id, force=True)) == 7 and len(fal.calls) == 14                      # and it is reused
+    assert state.status == StageStatus.FAILED and state.output["used_best"] == []
+    assert "dot: failed every draw" in state.error and state.output["not_drawn"] == ["dot_small", "dot_point", "dish_full"]
+
+
+def test_the_best_draw_is_used_only_when_it_scored_the_pass_mark_and_is_true_to_the_real_thing(container, stage):
+    service, fal, vision, run = stage
+    vision.no = "The picture shows only what the description names"                       # untidy every time, but true
+    made = service.run(run.id, until=0.5)
+    assert made["bench"].review == ReviewState.PASSED          # a backdrop has no such rule
+    assert all(made[d].review == ReviewState.USED_BEST and made[d].params["try"] == 3 for d in ("dot", "dish"))
+    assert container.run_repository().stage(run.id, StageName.VISUAL_IDENTITY).status == StageStatus.DONE
+    vision.no = TRUE                                           # a wrong body every time: never used
+    made = service.run(run.id)
+    assert made["dot_small"].review == ReviewState.FAILED and made["dot"].review == ReviewState.PASSED   # dot is reused
+    assert container.run_repository().stage(run.id, StageName.VISUAL_IDENTITY).status == StageStatus.FAILED
 
 
 def test_a_passed_picture_is_reused_though_an_older_try_with_the_same_key_failed(stage):

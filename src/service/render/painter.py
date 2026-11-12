@@ -2,10 +2,11 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from src.service.assembly.captions import FONT
-from src.service.render.timeline import CLOSEST, WORD_GAP, WORD_PAD, WORD_PX, WORD_RIM, WORD_WIDE, Frame, _back
+from src.service.render.timeline import (BODY, CLOSEST, NAME_PX, WORD_GAP, WORD_PAD, WORD_PX, WORD_RIM, WORD_WIDE, Frame,
+                                         _back)
 
 # A key word is drawn by code, never by the image model: dark letters on a white plate with a dark rim, like
-# the drawings' own outlines. The arrows between the stages of a row are drawn the same way.
+# the drawings' own outlines. The arrows between the stages of a row or ring are drawn the same way.
 INK, PLATE = (28, 32, 28, 255), (255, 255, 255, 255)
 
 
@@ -22,8 +23,8 @@ class Painter:
                              for name, picture in backgrounds.items()}
         self._stills, self._loops = stills, loops
         self._sized: dict[str, Image.Image] = {}                             # a still at the size it was last drawn
-        self._words: dict[str, Image.Image] = {}
-        self._arrows: dict[int, Image.Image] = {}
+        self._words: dict[tuple[str, float], Image.Image] = {}
+        self._arrows: dict[tuple[int, int], Image.Image] = {}
 
     def paint(self, frame: Frame) -> Image.Image:
         width, height, zoom = self._width, self._height, frame.zoom
@@ -32,8 +33,8 @@ class Painter:
         box = ((0.5 + frame.pan - seen) * back.width, (0.5 - seen) * back.height,
                (0.5 + frame.pan + seen) * back.width, (0.5 + seen) * back.height)
         canvas = back.transform((width, height), Image.EXTENT, box, Image.BILINEAR)
-        for x, y, length, popped in frame.arrows:
-            arrow = self._arrow(max(8, round(length * width * zoom * (0.6 + 0.4 * _back(popped)))))
+        for x, y, length, turn, popped in frame.arrows:
+            arrow = self._arrow(max(8, round(length * width * zoom * (0.6 + 0.4 * _back(popped)))), round(turn))
             self._lay(canvas, arrow, width / 2 + (x - 0.5 - frame.pan) * width * zoom, height / 2 + (y - 0.5) * height * zoom,
                       min(1.0, 2 * popped))
         for item in frame.items:
@@ -42,6 +43,9 @@ class Painter:
             x = width / 2 + (item.x - 0.5 - frame.pan) * width * zoom
             y = height / 2 + (item.y - 0.5) * height * zoom
             self._lay(canvas, picture, x, y, item.opacity)
+            if item.name:                                                   # just under its subject
+                name = self._word(item.name, NAME_PX)
+                self._lay(canvas, name, x, y + side * BODY / 2 + name.height / 2, item.opacity)
         for text, x, y, popped in frame.words:
             plate = self._word(text)
             reach = plate.width / 2 + WORD_GAP * width
@@ -62,21 +66,21 @@ class Painter:
             sized = self._sized[drawing] = self._stills[drawing].resize((side, side), Image.LANCZOS)
         return sized
 
-    def _arrow(self, length: int) -> Image.Image:
-        """An arrow that long pointing right, drawn once for each length."""
-        if length not in self._arrows:
+    def _arrow(self, length: int, turn: int) -> Image.Image:
+        """An arrow that long, turned that many degrees clockwise from pointing right, drawn once for each."""
+        if (length, turn) not in self._arrows:
             tall, rim = length * 0.7, max(1, round(WORD_RIM * self._height * 0.75))
             arrow = Image.new("RGBA", (length, round(tall)), (0, 0, 0, 0))
             shape = [(0, 0.32), (0.55, 0.32), (0.55, 0), (1, 0.5), (0.55, 1), (0.55, 0.68), (0, 0.68)]
             ImageDraw.Draw(arrow).polygon([(x * (length - 1), y * (tall - 1)) for x, y in shape], fill=PLATE, outline=INK,
                                           width=rim)
-            self._arrows[length] = arrow
-        return self._arrows[length]
+            self._arrows[length, turn] = arrow.rotate(-turn, Image.BICUBIC, expand=True) if turn else arrow
+        return self._arrows[length, turn]
 
-    def _word(self, text: str) -> Image.Image:
-        """A word on its plate, drawn once."""
-        if text not in self._words:
-            h = self._height
+    def _word(self, text: str, px: float = WORD_PX) -> Image.Image:
+        """A word on its plate, in letters `px` of the frame's height, drawn once."""
+        if (text, px) not in self._words:
+            h = self._height * px / WORD_PX
             font = ImageFont.truetype(str(FONT), round(WORD_PX * h))
             pad, rim = round(WORD_PAD * h), max(2, round(WORD_RIM * h))
             left, top, right, bottom = font.getbbox(text)
@@ -87,8 +91,8 @@ class Painter:
             widest = WORD_WIDE * self._width
             if plate.width > widest:
                 plate = plate.resize((round(widest), round(plate.height * widest / plate.width)), Image.LANCZOS)
-            self._words[text] = plate
-        return self._words[text]
+            self._words[text, px] = plate
+        return self._words[text, px]
 
     @staticmethod
     def _lay(canvas: Image.Image, picture: Image.Image, x: float, y: float, opacity: float) -> None:

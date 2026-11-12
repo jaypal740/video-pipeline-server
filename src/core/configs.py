@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     log_dir: str | None = Field(default="data/logs", validation_alias="PIPELINE_LOG_DIR")
     lesson_model: str = Field(default="claude-opus-5-5", validation_alias="PIPELINE_LESSON_MODEL")
     storyboard_model: str = Field(default="claude-opus-5-5", validation_alias="PIPELINE_STORYBOARD_MODEL")
+    # The judge that looks at frames of the whole 2D film, with the lesson beside them, before loops are made.
+    film_check_model: str = Field(default="claude-opus-5-5", validation_alias="PIPELINE_FILM_CHECK_MODEL")
     sheet_model: str = Field(default="nano-banana-2.1", validation_alias="PIPELINE_SHEET_MODEL")
     drawing_model: str = Field(default="nano-banana-2.1", validation_alias="PIPELINE_DRAWING_MODEL")
     host_model: str = Field(default="gpt-image-2", validation_alias="PIPELINE_HOST_MODEL")
@@ -54,6 +56,9 @@ class Settings(BaseSettings):
     # used, and below it the image fails. The stop-loss: a stage stops drawing when more than this share of
     # its first STOP_LOSS_AFTER finished images failed every draw.
     image_max_tries: int = Field(default=2, validation_alias="PIPELINE_IMAGE_MAX_TRIES")
+    # Draws per drawing of a 2D film. Every loop and frame is made from it, so it gets one more, and a drawing
+    # no draw of which passed is never used: the stage fails there, before anything is made from it.
+    drawing_max_tries: int = Field(default=3, validation_alias="PIPELINE_DRAWING_MAX_TRIES")
     image_stop_loss: float = Field(default=0.5, validation_alias="PIPELINE_IMAGE_STOP_LOSS")
     storage: str = Field(default="local", validation_alias="PIPELINE_STORAGE")
     r2_account_id: str | None = Field(default=None, validation_alias="R2_ACCOUNT_ID")

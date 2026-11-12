@@ -1,4 +1,5 @@
 from src.service.intake.intake_alignment import lyric_lines, song_confidence, spoken_tokens, timed_words
+from src.service.intake.intake_jamwise import jamwise_lines
 
 LINES = ["In 1858 a ship", "It holds."]
 
@@ -39,3 +40,12 @@ def test_song_confidence_weights_long_lines_more():
     _, owners = spoken_tokens(lines)
     words = timed_words(lines, owners, [(0, 1, 0.9), (1, 2, 0.9), (2, 3, 0.9), (3, 4, 0.1)])
     assert song_confidence(lyric_lines(lines, words)) == 0.7
+
+
+def test_a_jamwise_line_starts_at_its_earliest_word():
+    timing = [{"text": "Egg to larva", "startTime": 113.0, "endTime": 114.4, "words": [
+        {"word": "Egg", "start": 113.0, "end": 113.0}, {"word": "to", "start": 111.4, "end": 111.44},
+        {"word": "larva", "start": 111.68, "end": 114.4}]}]
+    words, lines = jamwise_lines(timing, ["Egg to larva"], 120.0)
+    assert (lines[0].start, lines[0].end) == (111.4, 114.4)
+    assert [(w.start, w.end) for w in words] == [(111.4, 111.4), (111.4, 111.44), (111.68, 114.4)]

@@ -17,6 +17,7 @@ from src.service.drawing.cutout import KEY
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.loop.loop_checks import LoopCheck, LoopCutService, cut_frames, problems_of
 from src.service.loop.loop_prompt import loop_brief, loop_prompt
+from src.service.render.film_check_service import film_key
 from src.service.storage.storage_service import LocalStorage
 from src.service.video.fal_video_service import VideoReply
 from tests.test_drawing_service import BOARD, BY_ID, PLAN, SCRIPT, FakeVision, picture
@@ -85,6 +86,8 @@ def stage(container: Container, tmp_path):
                                               review=ReviewState.PASSED)).id
     runs.stage_states.add(StageState(run_id=run.id, stage=StageName.VISUAL_IDENTITY, status=StageStatus.DONE,
                                      output={"drawings": drawn}))
+    runs.stage_states.add(StageState(run_id=run.id, stage=StageName.QC, status=StageStatus.DONE,
+                                     input_hash=film_key(SCRIPT, drawn)))
     return container.loop_service(), video, cutter, vision, run
 
 
@@ -182,6 +185,21 @@ def test_a_drawing_no_loop_of_which_can_be_cut_out_fails_the_stage(container, st
     assert made.review == ReviewState.FAILED and made.params["cut"] is None and vision.seen == []
     state = container.run_repository().stage(run.id, StageName.LOOPS)
     assert state.status == StageStatus.FAILED and "dot_point: no loop could be cut out" in state.error
+
+
+def test_no_loop_is_made_until_the_film_check_has_passed_these_drawings(container, stage):
+    service, video, _, _, run = stage
+    runs = container.run_repository()
+    check = runs.stage(run.id, StageName.QC)
+    check.status, check.error = StageStatus.FAILED, "12 s wrong_learning: a butterfly with a caterpillar's body"
+    runs.stage_states.update(check)
+    with pytest.raises(ValueError, match="has not passed its check.*It found: 12 s wrong_learning"):
+        service.run(run.id)
+    check.status, check.input_hash = StageStatus.DONE, "a check of other drawings"
+    runs.stage_states.update(check)
+    with pytest.raises(ValueError, match="run the check stage first"):
+        service.run(run.id)
+    assert video.calls == []
 
 
 def test_a_run_needs_its_drawings_before_its_loops(container, stage):

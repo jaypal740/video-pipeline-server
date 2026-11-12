@@ -1,7 +1,7 @@
 from src.schema.lesson.lesson_schema import Beat
 from src.schema.song.song_analysis_schema import TimedWord
 from src.schema.storyboard.script_schema import Action, BeatScriptDraft, Drawing, DrawingList, Screen
-from src.service.storyboard.script_rules import drawing_problems, finish, play
+from src.service.storyboard.script_rules import cover_problems, drawing_problems, finish, play
 
 LIST = [Drawing(id="meadow", kind="background", look="A green meadow"),
         Drawing(id="night", kind="background", look="A dark sky"),
@@ -52,10 +52,12 @@ def test_hero_beats_need_a_performer_who_is_described_and_moves():
     loud = Drawing(id="horn", kind="object", look="A horn", sings=True)
     assert any("only a performer drawing sings" in p for p in drawing_problems(listed(LIST + [loud]), [beat()]))
     assert any("performer must say" in p for p in drawing_problems(listed(performer=None), [beat()]))
+    bare = Drawing(id="tree_bare", kind="object", look="A tree with no leaves.")
+    assert any("tree_bare's look says what is not there ('no')" in p for p in drawing_problems(listed(LIST + [bare]), [beat()]))
     still = Drawing(id="pip", kind="performer", look="Waving")
     assert any("pip needs a motion" in p for p in drawing_problems(listed([LIST[0], still]), [beat()]))
-    poses = [Drawing(id=f"pip_{i}", kind="performer", look="Pose", motion="sways") for i in range(13)]
-    assert any("13 performer poses" in p for p in drawing_problems(listed([LIST[0]] + poses), [beat()]))
+    poses = [Drawing(id=f"pip_{i}", kind="performer", look="Pose", motion="sways") for i in range(40)]
+    assert drawing_problems(listed([LIST[0]] + poses), [beat()]) == []      # as many as the song needs: no count is a fault
 
 
 def test_backgrounds_and_icons_do_not_move_and_of_names_a_drawing_of_the_same_kind():
@@ -78,6 +80,24 @@ def test_the_stages_of_a_process_line_up_in_a_row_several_performer_drawings_amo
                                                                  act("move", 11.0, "leaf", pos="row", until=12.0)]))
     full = Screen(background="meadow", on={d: "row" for d in ("egg", "leaf", "twig", "arrow", "pip")})
     assert any("the row is full" in p for p in problems([act("show", 10.0, "caterpillar", pos="row")], before=full))
+
+
+def test_the_stages_of_a_cycle_go_round_a_ring_whose_middle_is_for_a_singer_who_is_not_one_of_them():
+    stages = [act("show", 10.0, "caterpillar", pos="ring"), act("show", 10.0, "pip", pos="center"),
+              act("show", 11.0, "egg", pos="ring"), act("show", 12.0, "twig", pos="ring")]
+    found, screens = play([script("b01", "meadow", *stages)], [beat(type="hero")], DRAWINGS, Screen())
+    assert found == [] and screens[0].sung == [("pip", 10.0, 14.0)] and screens[0].on["twig"] == "ring"
+    stages[0] = act("show", 10.0, "pip_point", pos="ring")
+    twice = problems(stages, beat(type="hero"))             # the performer is a stage: no second drawing of it in the middle
+    assert len(twice) == 1 and "pip_point is on screen; the performer is one drawing at a time" in twice[0]
+    assert problems(stages[:1] + stages[2:], beat(type="hero")) == []                     # the stages alone
+    assert any("top is taken by pip_point" in p for p in problems(stages[:1] + [act("show", 11.0, "leaf", pos="top")]))
+    assert any("ring is taken by leaf" in p for p in problems([act("show", 10.0, "leaf", pos="left"), stages[0]]))
+    assert any("ring is taken by egg" in p for p in problems([act("show", 10.0, "egg", pos="row"), stages[0]]))
+    assert any("joins the ring with show" in p for p in problems([act("show", 10.0, "leaf", pos="center"),
+                                                                  act("move", 11.0, "leaf", pos="ring", until=12.0)]))
+    full = Screen(background="meadow", on={d: "ring" for d in ("egg", "leaf", "twig", "arrow", "pip")})
+    assert any("the ring is full" in p for p in problems([act("show", 10.0, "caterpillar", pos="ring")], before=full))
 
 
 def test_a_beat_plays_and_leaves_its_drawings_on_screen():
@@ -109,6 +129,9 @@ def test_actions_are_timed_inside_their_beat_and_only_the_models_verbs_are_allow
     assert any("inside the beat" in p for p in problems([shown, act("hide", 15.0, "caterpillar")]))
     assert any("until must be after" in p for p in problems([shown, act("zoom", 11.0, "caterpillar", scale=1.5)]))
     assert any("scale must be" in p for p in problems([shown, act("zoom", 11.0, "caterpillar", scale=9, until=12.0)]))
+    grown = [act("show", 10.0, "pip", pos="center"), act("zoom", 11.0, "pip", scale=1.8, until=12.0)]
+    assert any("between 0.5 and 1.5; a performer drawing any bigger does not fit" in p for p in problems(grown))
+    assert problems([shown, act("zoom", 11.0, "caterpillar", scale=1.8, until=12.0)]) == []    # an object is smaller
     assert any("left or right" in p for p in problems([shown, act("pan", 11.0, pos="top", until=12.0)]))
     assert any("code adds keyword" in p for p in problems([shown, act("keyword", 11.0, text="egg")]))
     assert any("'meadow' is not a listed performer" in p for p in problems([shown, act("show", 11.0, "meadow")]))
@@ -122,32 +145,60 @@ def test_something_must_really_move_in_every_beat():
     assert problems([act("show", 10.0, "caterpillar", pos="center"), act("pan", 11.0, pos="left", until=13.0)]) == []
 
 
-def test_a_long_beat_needs_two_actions():
-    b = beat(end=18.0)
-    assert any("at least 2" in p for p in problems([act("show", 10.0, "caterpillar", pos="center")], b))
+def test_a_stage_name_is_one_or_two_words_on_a_drawing_that_is_not_a_background():
+    named = [LIST[0].model_copy(update={"name": "meadow"}), LIST[1], LIST[2].model_copy(update={"name": "egg"}),
+             LIST[3].model_copy(update={"name": "a very hungry larva"}), *LIST[4:]]
+    found = drawing_problems(listed(named), [beat()])
+    assert [p.split("'s name")[0] for p in found] == ["meadow", "caterpillar"]
 
 
-def test_a_hero_beat_keeps_its_singer_on_screen_from_the_start():
+def test_the_picture_never_holds_still_for_long():
+    b, shown = beat(end=20.0), act("show", 10.0, "caterpillar", pos="center")
+    assert any("nothing new happens from 10 to 20" in p for p in problems([shown], b))
+    pulse = [shown, act("highlight", 12.0, "caterpillar", until=13.0), act("push_in", 14.0, until=18.0)]
+    assert any("nothing new happens from 10 to 20" in p for p in problems(pulse, b))    # a pulse and the camera are not new
+    late = [shown, act("move", 11.0, "caterpillar", pos="left", until=15.0), act("swap", 15.5, "caterpillar", to="egg")]
+    assert any("nothing new happens from 15.5 to 20" in p for p in problems(late, b))   # a move counts for as long as it lasts
+    assert problems(late + [act("zoom", 18.0, "egg", scale=1.5, until=19.0)], b) == []
+
+
+def test_a_hero_beat_has_the_performer_on_screen_from_its_start_and_whichever_drawing_can_sing_sings():
     b = beat(type="hero")
     late = [act("show", 12.0, "pip", pos="center"), act("push_in", 12.5, until=14.0)]
     assert any("from its start" in p for p in problems(late, b))
-    gone = [act("show", 10.0, "pip", pos="center"), act("swap", 12.0, "pip", to="pip_point")]
-    assert any("pip sings the whole hero beat" in p for p in problems(gone, b))
-    mute = [act("show", 10.0, "pip_point", pos="center"), act("push_in", 11.0, until=14.0)]
-    assert any("pip_point cannot sing" in p for p in problems(mute, b))
     sung = script("b01", "meadow", act("show", 10.2, "pip", pos="center"), act("push_in", 11.0, until=14.0))
     found, screens = play([sung], [b], DRAWINGS, Screen())
-    assert found == [] and screens[0].singer == "pip"
+    assert found == [] and screens[0].sung == [("pip", 10.0, 14.0)]
     assert sung.actions[0].at == 10.0                        # 0.2 s after the start is moved to the start
+    grows = script("b01", "meadow", act("show", 10.0, "pip_point", pos="center"),         # a stage with no mouth,
+                   act("swap", 11.0, "pip_point", to="pip"), act("hide", 13.0, "pip"))    # then the one that sings
+    found, screens = play([grows], [b], DRAWINGS, Screen())
+    assert found == [] and screens[0].sung == [("pip", 11.0, 13.0)]
+    assert play([grows], [beat()], DRAWINGS, Screen())[1][0].sung == []                   # only a hero beat is sung
 
 
-def test_only_one_performer_drawing_is_on_screen_at_a_time():
-    before = Screen(background="meadow", on={"pip": "left"})
-    assert any("only one performer drawing" in p for p in problems([act("show", 10.0, "pip_point", pos="right")],
-                                                                   before=before))
-    both = [act("show", 10.0, "caterpillar", pos="center"), act("swap", 11.0, "caterpillar", to="pip_point")]
-    assert any("only one performer drawing" in p for p in problems(both, before=before))
+def test_the_performer_is_one_drawing_at_a_time_outside_the_stages_of_a_row_or_ring():
+    before, pair = Screen(background="meadow", on={"pip": "left"}), [act("show", 10.0, "pip_point", pos="right")]
+    assert any("pip is on screen; the performer is one drawing at a time" in p for p in problems(pair, before=before))
     assert problems([act("swap", 10.0, "pip", to="pip_point")], before=before) == []     # a new pose replaces the old
+    egg = Screen(background="meadow", on={"pip": "left", "egg": "center"})
+    assert any("pip is on screen" in p for p in problems([act("swap", 10.0, "egg", to="pip_point")], before=egg))
+    ring = Screen(background="meadow", on={"pip": "ring", "pip_point": "ring"})
+    assert any("pip_point is on screen" in p for p in problems([act("move", 10.0, "pip", pos="center", until=11.0)],
+                                                               before=ring))            # a stage does not step out beside the rest
+    assert any("pip is on screen" in p for p in problems([act("show", 10.0, "pip_point", pos="ring")], before=before))
+
+
+def test_no_drawing_may_hide_much_of_another_once_the_script_is_laid_out():
+    b = beat(end=14.0)
+    stacked = script("b01", "meadow", act("show", 10.0, "leaf", pos="center"), act("show", 10.0, "pip", pos="top"))
+    apart = script("b01", "meadow", act("show", 10.0, "leaf", pos="left"), act("show", 10.0, "pip", pos="center"))
+    passing = script("b01", "meadow", act("show", 10.0, "leaf", pos="center"), act("show", 10.0, "pip", pos="left"),
+                     act("move", 11.0, "pip", pos="right", until=12.0))
+    found = [cover_problems(listed(), finish([s], [b], [Screen()], [], 15.0, []), 16 / 9) for s in (stacked, apart, passing)]
+    assert len(found[0]) == 1 and found[0][0].startswith("b01: from 10.25 pip covers leaf; nothing may hide another")
+    assert found[1] == [] and found[2] == []                 # side by side, and only passing in front of it
+    assert cover_problems(listed(), finish([stacked], [b], [Screen()], [], 15.0, []), 16 / 9, since=12.0) == []
 
 
 def test_each_beat_asked_for_gets_one_script():
@@ -159,7 +210,8 @@ def test_code_adds_the_key_word_the_figure_and_the_lip_sync():
     words = [TimedWord(index=i, line_index=0, text=t, start=11.0 + i, end=11.5 + i) for i, t in enumerate(["In", "1858"])]
     b = beat(type="hero", keyword="colony", keyword_at=13.5, number_text="1858")
     sung = script("b01", "meadow", act("push_in", 11.0, until=14.0), act("show", 10.0, "pip", pos="center"))
-    done = finish([sung], [b], [Screen(background="meadow", on={"pip": "center"}, singer="pip")], words, 15.0, [])
+    done = finish([sung], [b], [Screen(background="meadow", on={"pip": "center"}, sung=[("pip", 10.0, 14.0)])], words,
+                  15.0, [])
     assert (done[0].start, done[0].end, done[0].type) == (10.0, 14.0, "hero")
     assert [(a.verb, a.at, a.until) for a in done[0].actions] == [
         ("show", 10.0, None), ("lipsync", 10.0, 14.0), ("push_in", 11.0, 14.0), ("number", 12.0, 14.0),

@@ -11,15 +11,19 @@ from src.core.container import Container
 from src.schema.asset.asset_schema import Asset, ReviewState
 from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.lesson.lesson_schema import GradeBand
+from src.schema.song.song_analysis_schema import SongAnalysis
 from src.schema.run.run_schema import Run
 from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_schema import Song
-from src.schema.storyboard.script_schema import Action, AnimationScript
+from src.schema.storyboard.script_schema import Action, AnimationScript, FilmReview
+from src.service.llm.llm_service import ProviderReply
 from src.service.local.ffmpeg_service import FfmpegService
+from src.service.render.film_check_service import film_key, look_times
 from src.service.render.painter import Painter
-from src.service.render.timeline import CLOSE, EDGE, IN, ROW_FILL, ROW_Y, WIDE, Frame, Item, frame_at, scenes_of
+from src.service.render.timeline import (BODY, CLOSE, EDGE, IN, NAMED, RING_ARROW, RING_FILL, ROW_FILL, ROW_Y, WIDE,
+                                         Frame, Item, frame_at, scenes_of)
 from src.service.storage.storage_service import LocalStorage
-from tests.test_drawing_service import BOARD, show
+from tests.test_drawing_service import BOARD, PLAN, show
 from tests.test_loop_service import frames
 
 # The drawings stage's test script, with a third beat on another backdrop and more to do in it.
@@ -96,6 +100,8 @@ def test_a_key_word_takes_the_spot_that_covers_the_least_of_the_drawings_and_pop
     crowded = staged(show("dot", 4, "top"), show("dish", 4, "left"), show("dish_full", 4, "right"), word=True)
     assert crowded.words[0][1:3] == (0.5, 0.72)                                             # under the performer up top
     assert frame_at(SCENES, 11.1, SHAPE).words[0][3] == pytest.approx(0.4) and frame_at(SCENES, 13.5, SHAPE).words == []
+    ring = staged(show("dish", 4, "ring"), show("dot_point", 4.5, "ring"), show("dish_full", 5, "ring"), word=True)
+    assert ring.words[0][1:3] == (0.22, 0.13)                  # (0.22, 0.3) is clear of the stages but on the arrow back to the first
 
 
 def test_a_drawing_too_big_for_its_place_is_moved_to_stay_whole_in_the_wide_cameras_view():
@@ -103,6 +109,11 @@ def test_a_drawing_too_big_for_its_place_is_moved_to_stay_whole_in_the_wide_came
     assert high.drawing == "dot" and high.y - high.size / 2 == pytest.approx(EDGE)          # its head was out of the frame
     assert low.y + low.size / 2 == pytest.approx(1 - EDGE) and (high.x, low.x) == (0.5, 0.5)
     assert on_screen(1)["dish"].y == 0.54 and staged(show("arrow", 4, "top")).items[0].y == 0.2    # these fit as placed
+    push = SCRIPT.beats[2].actions[2].model_dump() | {"verb": "push_in", "at": 5.5, "until": 5.8}
+    swap = {"verb": "swap", "drawing": "dot", "to": "dot_point", "at": 5.2}
+    first, then = (frame_at(scenes_of(SCRIPT, [SCRIPT.beats[1].model_copy(update={"actions": [
+        Action(**a) for a in (show("dot", 4, "left"), swap, push)]})], SHAPE), t, SHAPE).items[0] for t in (4.8, 6))
+    assert first.drawing == "dot" and first.x == then.x == pytest.approx(0.5 - 0.5 / CLOSE + 0.62 / SHAPE / 2)   # one swapped in before a push in stands where it will fit
 
 
 def test_a_row_of_stages_shares_the_view_out_left_to_right_with_an_arrow_to_each_next_stage():
@@ -112,8 +123,8 @@ def test_a_row_of_stages_shares_the_view_out_left_to_right_with_an_arrow_to_each
     assert (dish.x, dot.x, point.x) == pytest.approx((EDGE + place / 2, 0.5, 1 - EDGE - place / 2))
     assert dish.y == dot.y == point.y == ROW_Y and dot.age == 1.5                           # each still plays its loop
     assert dot.size / SHAPE == pytest.approx(ROW_FILL * place) and dish.size == pytest.approx(0.44)   # made to fit its place
-    assert [(round(x, 3), y, popped) for x, y, _, popped in row.arrows] == [
-        (round(EDGE + place, 3), ROW_Y, 1.0), (round(EDGE + 2 * place, 3), ROW_Y, 1.0)]     # half way between two stages
+    assert [(round(x, 3), y, turn, popped) for x, y, _, turn, popped in row.arrows] == [
+        (round(EDGE + place, 3), ROW_Y, 0, 1.0), (round(EDGE + 2 * place, 3), ROW_Y, 0, 1.0)]   # half way between two stages
     assert row.arrows[0][2] < (1 - ROW_FILL * 0.8) * place and row.words == []
     early = frame_at(scenes_of(SCRIPT, [SCRIPT.beats[1].model_copy(update={"actions": [
         Action(**show("dish", 4, "row")), Action(**show("dot", 7, "row"))]})], SHAPE), 6, SHAPE)
@@ -122,6 +133,72 @@ def test_a_row_of_stages_shares_the_view_out_left_to_right_with_an_arrow_to_each
                   SCRIPT.beats[2].actions[2].model_dump() | {"verb": "push_in", "at": 5, "until": 5.5})
     edges = [0.5 + (i.x + side * i.size / SHAPE / 2 - 0.5) * near.zoom for i in near.items for side in (-1, 1)]
     assert near.zoom == CLOSE and 0 < min(edges) < 0.02 and 0.98 < max(edges) < 1          # the camera cuts no stage off
+
+
+def test_a_ring_of_stages_goes_round_the_view_with_an_arrow_from_the_last_stage_back_to_the_first():
+    ring = staged(show("dish", 4, "ring"), show("dot_point", 4.5, "ring"), show("dish_full", 5, "ring"),
+                  show("dot_small", 5.5, "ring"), show("dot", 4))
+    top, right, low, left, singer = (next(i for i in ring.items if i.drawing == d)
+                                     for d in ("dish", "dot_point", "dish_full", "dot_small", "dot"))
+    side = RING_FILL * (1 - 2 * EDGE)
+    assert (top.x, low.x, right.y, left.y) == pytest.approx((0.5, 0.5, 0.5, 0.5))           # clockwise from the top
+    assert top.y - side / 2 == pytest.approx(EDGE) and low.y + side / 2 == pytest.approx(1 - EDGE)
+    assert right.x + side / SHAPE / 2 == pytest.approx(1 - EDGE) and left.x - side / SHAPE / 2 == pytest.approx(EDGE)
+    assert top.size == right.size == pytest.approx(side) and left.age == 0.5                # each still plays its loop
+    assert singer.size == pytest.approx(1 - 2 * EDGE - 2 * side) and (singer.x, singer.y) == pytest.approx((0.5, 0.5))   # it fits the hole, in its middle
+    turns = [round(turn) for _, _, _, turn, _ in ring.arrows]
+    assert len(turns) == 4 and 0 < turns[0] < 90 < turns[1] < 180 and -180 < turns[2] < -90 < turns[3] < 0   # round, and back
+    assert all(length == RING_ARROW for _, _, length, _, _ in ring.arrows)
+    assert (ring.arrows[3][0], ring.arrows[3][1]) == pytest.approx(((left.x + top.x) / 2, (left.y + top.y) / 2))
+    open_ring = frame_at(scenes_of(SCRIPT, [SCRIPT.beats[1].model_copy(update={"actions": [
+        Action(**show("dish", 4, "ring")), Action(**show("dot", 4.5, "ring")), Action(**show("dish_full", 7, "ring"))]})],
+        SHAPE), 6, SHAPE)
+    assert len(open_ring.arrows) == 1                                                       # it closes with its last stage
+    twice = [show("dish", 4, "ring"), show("dot_point", 4.2, "ring"), {"verb": "hide", "drawing": "dish", "at": 5},
+             {"verb": "hide", "drawing": "dot_point", "at": 5}, show("dot", 5), show("dish", 5.5, "ring"),
+             show("dish_full", 5.6, "ring"), show("dot_small", 5.7, "ring")]
+    first, second = (frame_at(scenes_of(SCRIPT, [SCRIPT.beats[1].model_copy(update={"actions": [
+        Action(**a) for a in twice]})], SHAPE), t, SHAPE) for t in (4.8, 6))
+    assert len(first.items) == 2 and first.items[1].y + side / 2 == pytest.approx(1 - EDGE)    # a ring of two, top and bottom
+    assert len(second.arrows) == 3 and [round(i.x, 3) for i in second.items if i.drawing == "dish"] == [0.5]   # then one of three
+    assert next(i.size for i in second.items if i.drawing == "dot") == pytest.approx(1 - 2 * EDGE - 2 * side)
+    zoomed = staged(*twice, {"verb": "zoom", "drawing": "dot", "scale": 1.5, "at": 5.2, "until": 5.4})
+    assert next(i.size for i in zoomed.items if i.drawing == "dot") == pytest.approx(1 - 2 * EDGE - 2 * side)   # a zoom cannot outgrow the hole
+    moved = [*twice[:2], {"verb": "hide", "drawing": "dot_point", "at": 5}, {"verb": "move", "drawing": "dish", "pos": "center",
+                                                                              "at": 5, "until": 5.5}]
+    after = frame_at(scenes_of(SCRIPT, [SCRIPT.beats[1].model_copy(update={"actions": [Action(**a) for a in moved]})],
+                               SHAPE), 6, SHAPE)
+    assert after.arrows == [] and [i.drawing for i in after.items] == ["dish"]                 # a ring ends when its last stage moves out
+    assert staged(show("dot", 4)).items[0].size == pytest.approx(0.62)                         # full size with no ring
+    push = SCRIPT.beats[2].actions[2].model_dump() | {"verb": "push_in", "at": 5.2, "until": 5.4}
+    before = frame_at(scenes_of(SCRIPT, [SCRIPT.beats[1].model_copy(update={"actions": [
+        Action(**a) for a in (*twice[:4], push)]})], SHAPE), 4.8, SHAPE)
+    assert before.items[0].size == pytest.approx(side)                                         # a push in after it has gone leaves it be
+    during = staged(*twice[:2], push)
+    assert during.zoom == CLOSE and during.items[0].size == pytest.approx(RING_FILL / CLOSE)   # one while it is up makes it smaller
+
+
+def test_a_stage_with_a_name_is_drawn_smaller_and_higher_with_its_name_under_it():
+    named = SCRIPT.model_copy(update={"drawings": [d.model_copy(update={"name": "dish stage"}) if d.id == "dish" else d
+                                                   for d in SCRIPT.drawings]})
+    beat = SCRIPT.beats[1].model_copy(update={"actions": [Action(**a) for a in (
+        show("dish", 4, "ring"), show("dot_point", 4.5, "ring"), show("dish_full", 5, "ring"), show("dot_small", 5.5, "ring"),
+        {"verb": "hide", "drawing": "dot_small", "at": 6.5}, {"verb": "move", "drawing": "dish", "pos": "left", "at": 6.6})]})
+    frame = frame_at(scenes_of(named, [beat], SHAPE), 6, SHAPE)
+    top, right = (next(i for i in frame.items if i.drawing == d) for d in ("dish", "dot_point"))
+    side = RING_FILL * (1 - 2 * EDGE)
+    assert (top.name, right.name) == ("dish stage", None) and right.size == pytest.approx(side)
+    assert top.size == pytest.approx(side * NAMED) and top.y + top.size / 2 == pytest.approx(EDGE + side * NAMED)
+    alone = scenes_of(named, [SCRIPT.beats[1].model_copy(update={"actions": [Action(**show("dish", 4, "left"))]})], SHAPE)
+    assert frame_at(alone, 6, SHAPE).items[0].name is None                                  # only in a row or ring
+    painter = Painter(160, 90, 24, {"plate": Image.new("RGB", (160, 90), (0, 0, 255))},
+                      {"dish": Image.new("RGBA", (40, 40), (255, 0, 0, 255))}, {})
+    item = Item(drawing="dish", x=0.5, y=0.4, size=0.4, opacity=1.0, age=1.0, name="egg")
+    plain, written = (np.asarray(painter.paint(Frame(background="plate", zoom=1.0, pan=0.0, items=[i], words=[])))
+                      for i in (item.model_copy(update={"name": None}), item))
+    changed = np.argwhere((plain != written).any(axis=2))
+    assert changed[:, 0].min() >= round(90 * (0.4 + 0.4 * BODY / 2)) - 1                    # below its subject
+    assert (written[changed[:, 0], changed[:, 1]] == (255, 255, 255)).all(axis=1).any()     # a white plate
 
 
 def test_a_frame_is_painted_from_the_background_the_cut_outs_and_the_loops_frame_for_its_age():
@@ -145,8 +222,10 @@ def test_a_frame_is_painted_from_the_background_the_cut_outs_and_the_loops_frame
     assert tuple(paint(opacity=0.5)[50, 50]) == (110, 60, 0)
     word = paint(words=[("colony", 0.5, 0.5, 1.0)])
     assert (word[40:60, 70:130] == 255).all(axis=2).any() and tuple(word[5, 5]) == (0, 120, 0)              # a white plate
-    arrow = paint(arrows=[(0.5, 0.15, 0.2, 1.0)])                                           # 40 px long, about (100, 15)
+    arrow = paint(arrows=[(0.5, 0.15, 0.2, 0, 1.0)])                                        # 40 px long, about (100, 15)
     assert tuple(arrow[15, 95]) == (255, 255, 255) and tuple(arrow[15, 75]) == tuple(arrow[3, 85]) == (0, 120, 0)
+    down = paint(arrows=[(0.5, 0.3, 0.2, 90, 1.0)])                                         # the same arrow, pointing down
+    assert tuple(down[25, 100]) == (255, 255, 255) and tuple(down[30, 85]) == tuple(down[30, 115]) == (0, 120, 0)
     long = paint(words=[("metamorphosis", 0.78, 0.3, 1.0)])                                 # smaller, and moved in to fit
     assert (long[30, 125:190] == 255).all(axis=1).any() and tuple(long[30, 108]) == tuple(long[30, 198]) == (0, 120, 0)
 
@@ -226,3 +305,97 @@ def test_a_render_needs_the_drawings_and_loops_its_beats_show(container, stage):
         service.run(run.id, until=3, force=True)
     with pytest.raises(LookupError):
         service.run("missing")
+
+
+class FakeJudge:
+    """The film judge: answers each check with the next list of problems it was given."""
+
+    name = "anthropic"
+
+    def __init__(self, *found):
+        self.found, self.seen = list(found), []
+
+    def inspect(self, model, system, user, images, output_type, effort):
+        self.seen.append((user, [i.label for i in images]))
+        return ProviderReply(output=FilmReview(problems=self.found.pop(0)), model=model, input_tokens=50000,
+                             output_tokens=300, cost_usd=0.2)
+
+
+class FakeScripts:
+    """The script and drawing stages as the film check calls them."""
+
+    def __init__(self):
+        self.repaired, self.restored, self.drawn = [], [], 0
+
+    def repair(self, run_id, gaps):
+        self.repaired.append(gaps)
+
+    def restore(self, run_id, board):
+        self.restored.append(board)
+
+    def run(self, run_id):
+        self.drawn += 1
+
+
+def test_the_judge_is_shown_every_drawing_once_it_has_come_and_nothing_half_faded():
+    times = look_times(SCRIPT, SHAPE)
+    assert times == pytest.approx([0.4, 1.4, 5.4, 6.4, 7.4, 8.4, 10.0, 11.0])   # each drawing 0.4 s after it came (5.4: the swap
+    # has finished), then the picture after the move and after the zoom; the key word at 11.4 is too close to 11.0
+
+
+def test_the_film_is_painted_from_the_still_drawings_alone(stage):
+    service, run, _ = stage
+    still, = service.stills(run.id, [3.0], 90)
+    assert still.size == (160, 90) and still.getpixel((5, 5))[1] > 90                       # the backdrop
+    assert still.getpixel((80, 49))[0] > 180 and still.getpixel((35, 49))[0] > 180          # the dish, and dot_point holding still
+
+
+@pytest.fixture
+def check(container: Container, stage):
+    """The render stage's run with its lesson and lines, and the film check with a judge and stages that answer as told."""
+    _, run, _ = stage
+    runs, songs = container.run_repository(), container.song_repository()
+    runs.stage_states.add(StageState(run_id=run.id, stage=StageName.LESSON, status=StageStatus.DONE,
+                                     output=PLAN.model_dump(mode="json")))
+    song = songs.songs.get(run.song_id)
+    song.analysis_id = songs.analyses.add(SongAnalysis(cache_key="k", audio_sha256="a", lyrics_sha256="l", duration_s=14,
+                                                       accepted=True, lines=[], words=[])).id
+    songs.songs.update(song)
+    judge, scripts = FakeJudge(), FakeScripts()
+    container.anthropic_service.override(providers.Object(judge))
+    container.storyboard_service.override(providers.Object(scripts))
+    container.drawing_service.override(providers.Object(scripts))
+    return container.film_check_service(), judge, scripts, run
+
+
+FACE = {"at": 6.4, "kind": "wrong_learning", "what": "The dish has a face."}
+
+
+def test_what_the_film_judge_finds_goes_back_to_the_script_and_the_film_is_judged_again(container, check):
+    service, judge, scripts, run = check
+    judge.found = [[FACE], []]
+    assert service.run(run.id) == []
+    user, labels = judge.seen[0]
+    assert labels[0] == "the film at 0.4 s" and len(labels) == len(look_times(SCRIPT, SHAPE))
+    assert "- b01, 0 to 4 s. Sung: music only. Must not suggest: One giant germ.\n  Steps: show dish center @0; show dot_point left @1" in user
+    assert "- dish: A clear glass dish" in user
+    assert scripts.repaired == [["b02: at 6.4 s the film shows this: The dish has a face."]] and scripts.drawn == 1
+    runs = container.run_repository()
+    state = runs.stage(run.id, StageName.QC)
+    assert state.status == StageStatus.DONE and state.output == {"problems": [], "repairs": 1, "accepted": False}
+    assert state.input_hash == film_key(SCRIPT, runs.stage(run.id, StageName.VISUAL_IDENTITY).output["drawings"])
+    assert service.run(run.id) == [] and len(judge.seen) == 2                               # the same film is not judged twice
+    assert container.asset_repository().run_cost(run.id) == pytest.approx(0.4)
+
+
+def test_a_repair_that_leaves_more_problems_is_undone_and_after_three_the_film_goes_on_with_the_best_script(container, check):
+    service, judge, scripts, run = check
+    judge.found = [[FACE], [FACE, {**FACE, "at": 9.0}], [FACE], [FACE], []]
+    found = service.run(run.id)
+    assert [(p.at, p.kind) for p in found] == [(6.4, "wrong_learning")] and scripts.restored == [SCRIPT]
+    assert len(scripts.repaired) == 3 and len(judge.seen) == 4                               # three repairs, each judged
+    state = container.run_repository().stage(run.id, StageName.QC)
+    assert state.status == StageStatus.DONE and state.error == "6.4 s wrong_learning: The dish has a face."
+    assert state.output["repairs"] == 3 and len(state.output["problems"]) == 1               # what is left is on record
+    assert service.run(run.id) == found and len(judge.seen) == 4                             # and is not judged again
+    assert service.run(run.id, force=True) == [] and len(scripts.repaired) == 3              # a clean film needs no repair

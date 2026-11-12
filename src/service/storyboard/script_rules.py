@@ -3,22 +3,26 @@ import re
 from src.schema.lesson.lesson_schema import Beat, BeatType, GradeBand
 from src.schema.song.song_analysis_schema import TimedWord
 from src.schema.storyboard.script_schema import (Action, BeatScript, BeatScriptDraft, Drawing, DrawingKind,
-                                                 DrawingList, Pos, Screen, Verb)
+                                                 DrawingList, Pos, Screen, ScriptRepair, Verb)
 from src.service.lesson.lesson_rules import band_rules, sung_at
+from src.service.render.timeline import covers, scenes_of
 
-# Each drawing is made once by the image model, so the list is kept short.
-MAX_DRAWINGS = 24
-# A performer that acts the lesson out is drawn in each state the lesson shows, and in the steps of a change.
-MAX_PERFORMER_POSES = 12
 MAX_ON_SCREEN = 4
-# A row of stages holds up to this many drawings, and stands where left, center and right are.
+# A look is drawn from its words, and an image model draws whatever is named, so a look names only what is seen.
+ABSENT = ("no", "not", "without")
+# A row or a ring of stages holds up to this many drawings. The row stands where left, center and right
+# are; the ring goes round the screen and leaves only its centre free.
 MAX_ROW = 5
-MIDDLE = {Pos.LEFT, Pos.CENTER, Pos.RIGHT}
+KEPT_CLEAR = {Pos.ROW: {Pos.LEFT, Pos.CENTER, Pos.RIGHT}, Pos.RING: {Pos.LEFT, Pos.RIGHT, Pos.TOP, Pos.BOTTOM}}
 PALETTE_COLOURS = (4, 6)
-ZOOM_SCALE = (0.5, 2.5)
-# A beat longer than this needs at least this many actions, so the picture keeps changing.
-LONG_BEAT_SECONDS = 4.0
-MIN_LONG_BEAT_ACTIONS = 2
+# A stage's name, written under its drawing in a row or ring, is this many words at most.
+MAX_NAME_WORDS = 2
+# The smallest a zoom makes a drawing, and the biggest each kind can be and still fit the screen.
+ZOOM_LEAST = 0.5
+ZOOM_MOST = {DrawingKind.PERFORMER: 1.5, DrawingKind.OBJECT: 2.0, DrawingKind.ICON: 2.5}
+# The longest a beat's picture may hold still: within this many seconds a drawing is shown, hidden, swapped,
+# moved or zoomed. A highlight or a camera move is not enough.
+MAX_STILL = 4.0
 # How long a key word or figure stays up once it is sung.
 KEYWORD_SECONDS = 2.0
 # Times this close to a beat's edge count as inside it.
@@ -29,6 +33,7 @@ SNAP = 0.25
 CAMERA = {Verb.PUSH_IN, Verb.PULL_BACK, Verb.PAN}
 BY_CODE = {Verb.KEYWORD, Verb.NUMBER, Verb.LIPSYNC}
 LASTING = {Verb.MOVE, Verb.ZOOM, Verb.HIGHLIGHT} | CAMERA
+NEW = {Verb.SHOW, Verb.HIDE, Verb.SWAP, Verb.MOVE, Verb.ZOOM}
 
 _ID = re.compile(r"^[a-z][a-z0-9_]*$")
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -47,8 +52,6 @@ def drawing_problems(listed: DrawingList, beats: list[Beat]) -> list[str]:
     by_id = {d.id: d for d in listed.drawings}
     if len(by_id) != len(listed.drawings):
         found.append("every drawing needs its own id")
-    if len(listed.drawings) > MAX_DRAWINGS:
-        found.append(f"{len(listed.drawings)} drawings; at most {MAX_DRAWINGS}, so reuse drawings across beats")
     if not PALETTE_COLOURS[0] <= len(listed.palette) <= PALETTE_COLOURS[1] \
             or not all(_HEX.match(c) for c in listed.palette):
         found.append(f"palette must be {PALETTE_COLOURS[0]} to {PALETTE_COLOURS[1]} hex colours such as #FFC857")
@@ -56,8 +59,6 @@ def drawing_problems(listed: DrawingList, beats: list[Beat]) -> list[str]:
     poses = kinds.count(DrawingKind.PERFORMER)
     if DrawingKind.BACKGROUND not in kinds:
         found.append("list at least one background")
-    if poses > MAX_PERFORMER_POSES:
-        found.append(f"{poses} performer poses; at most {MAX_PERFORMER_POSES}")
     if any(b.type == BeatType.HERO for b in beats) and not any(d.sings for d in listed.drawings):
         found.append("the song has hero beats, sung to the viewer; list at least one performer drawing that sings")
     if poses and not (listed.performer or "").strip():
@@ -67,6 +68,12 @@ def drawing_problems(listed: DrawingList, beats: list[Beat]) -> list[str]:
             found.append(f"id {d.id!r} must be snake_case, starting with a letter")
         if not d.look.strip():
             found.append(f"{d.id} needs a look: what to draw")
+        if absent := [w for w in ABSENT if w in re.findall(r"[a-z]+", d.look.lower())]:
+            found.append(f"{d.id}'s look says what is not there ({absent[0]!r}); whatever a look names gets drawn, so "
+                         "say only what is seen")
+        if d.name and (d.kind == DrawingKind.BACKGROUND or len(d.name.split()) > MAX_NAME_WORDS):
+            found.append(f"{d.id}'s name {d.name!r} must be a stage's name of at most {MAX_NAME_WORDS} words, on a "
+                         "drawing that is not a background; give null otherwise")
         if d.kind in (DrawingKind.BACKGROUND, DrawingKind.ICON) and d.motion:
             found.append(f"{d.id} is a {d.kind} and does not move; give its motion as null")
         if d.sings and d.kind != DrawingKind.PERFORMER:
@@ -95,10 +102,38 @@ def play(scripts: list[BeatScriptDraft], beats: list[Beat], drawings: dict[str, 
     return found, screens
 
 
+def mend(listed: DrawingList, scripts: list[BeatScriptDraft], repair: ScriptRepair
+         ) -> tuple[DrawingList, list[BeatScriptDraft]]:
+    """The drawings and the script with a repair applied: its new drawings added, its beats in place of the old."""
+    new = {s.beat: s for s in repair.beats}
+    return (listed.model_copy(update={"drawings": listed.drawings + repair.drawings}),
+            [new.get(s.beat, s) for s in scripts])
+
+
+def repair_problems(repair: ScriptRepair, listed: DrawingList, scripts: list[BeatScriptDraft], beats: list[Beat]
+                    ) -> list[str]:
+    """What is wrong with a repair: the whole script must still play with it, from its first beat."""
+    stray = sorted({s.beat for s in repair.beats} - {s.beat for s in scripts})
+    if stray or not repair.beats:
+        return [f"give the beats that change, by their ids in the script; {', '.join(stray) or 'none'} given"]
+    mended, fixed = mend(listed, scripts, repair)
+    return drawing_problems(mended, beats) + play(fixed, beats, {d.id: d for d in mended.drawings}, Screen())[0]
+
+
+def cover_problems(listed: DrawingList, scripts: list[BeatScript], wide: float, since: float = 0.0) -> list[str]:
+    """Where, from `since` on, one drawing would hide much of another in the film made from these scripts, as
+    code lays them out on a frame `wide` times as wide as it is tall."""
+    return [f"{next(s.beat for s in scripts if s.start <= at < s.end)}: from {at:g} {front} covers {behind}; nothing "
+            "may hide another drawing, so put them at places that stand clear (top and bottom overlap center, and a "
+            "drawing zoomed big overlaps its neighbours), make one smaller, or hide one first"
+            for at, front, behind in covers(scenes_of(listed, scripts, wide), wide) if at >= since]
+
+
 def _play_beat(script: BeatScriptDraft, beat: Beat, drawings: dict[str, Drawing], before: Screen
                ) -> tuple[list[str], Screen]:
     """One beat: its drawings stay from the beat before unless the background changes, which clears the
-    screen. Something must really move in it, and a hero beat keeps its singer on screen throughout. Actions
+    screen. Something must really move in it, its picture never holds still for long, and a hero beat has
+    the performer on screen from its start: whichever of its drawings can sing is the one that sings. Actions
     just after the beat's start are moved to the start."""
     found = []
     for a in script.actions:
@@ -112,38 +147,44 @@ def _play_beat(script: BeatScriptDraft, beat: Beat, drawings: dict[str, Drawing]
     opening = [a for a in acts if a.at <= beat.start + SLACK]
     for a in opening:
         found += _apply(a, beat, drawings, on)
-    singer = next((d for d in on if drawings[d].kind == DrawingKind.PERFORMER), None)
-    alive = _alive(on, drawings)
+    if beat.type == BeatType.HERO and not any(drawings[d].kind == DrawingKind.PERFORMER for d in on):
+        found.append(f"{beat.id} is a hero beat: a performer drawing must be on screen from its start, "
+                     f"{beat.start:g}")
+    alive, voices = _alive(on, drawings), [(beat.start, _singer(on, drawings))]
     for a in acts[len(opening):]:
-        if beat.type == BeatType.HERO and singer and a.drawing == singer and a.verb in (Verb.HIDE, Verb.SWAP):
-            found.append(f"{beat.id}: {singer} sings the whole hero beat; do not hide or swap it")
         found += _apply(a, beat, drawings, on)
         alive = alive or _alive(on, drawings)
+        if _singer(on, drawings) != voices[-1][1]:
+            voices.append((a.at, _singer(on, drawings)))
     if not alive and not any(a.verb == Verb.SWAP for a in acts):
         found.append(f"{beat.id}: nothing really moves; keep a drawing that has a motion on screen, or swap one "
                      "drawing for another")
-    seconds = beat.end - beat.start
-    if seconds > LONG_BEAT_SECONDS and len(acts) < MIN_LONG_BEAT_ACTIONS:
-        found.append(f"{beat.id} lasts {seconds:.1f} s with {len(acts)} actions; give it at least "
-                     f"{MIN_LONG_BEAT_ACTIONS} so the picture keeps changing")
-    if beat.type != BeatType.HERO:
-        singer = None
-    elif singer is None:
-        found.append(f"{beat.id} is a hero beat: a performer drawing must be on screen from its start, "
-                     f"{beat.start:g}")
-    elif not drawings[singer].sings:
-        found.append(f"{beat.id} is a hero beat but {singer} cannot sing; have a performer drawing that sings on "
-                     "screen from its start")
-    return found, Screen(background=script.background, on=on, singer=singer)
+    last = beat.start
+    for at, until in [(a.at, a.until or a.at) for a in acts if a.verb in NEW] + [(beat.end, beat.end)]:
+        if at - last > MAX_STILL + SLACK:
+            found.append(f"{beat.id}: nothing new happens from {last:g} to {at:g}; the picture holds still for at "
+                         f"most {MAX_STILL:g} s, so show, swap, move or zoom a drawing there: the next step of the "
+                         "beat's idea")
+            break
+        last = max(last, until)
+    sung = [(who, at, until) for (at, who), (until, _) in zip(voices, voices[1:] + [(beat.end, None)])
+            if who and until > at and beat.type == BeatType.HERO]
+    return found, Screen(background=script.background, on=on, sung=sung)
 
 
 def _alive(on: dict[str, Pos], drawings: dict[str, Drawing]) -> bool:
     return any(drawings[d].motion for d in on)
 
 
+def _singer(on: dict[str, Pos], drawings: dict[str, Drawing]) -> str | None:
+    """The drawing that sings just now: one with a mouth, big on screen, not a small stage of a row or ring."""
+    return next((d for d, pos in on.items() if drawings[d].sings and pos not in KEPT_CLEAR), None)
+
+
 def _apply(a: Action, beat: Beat, drawings: dict[str, Drawing], on: dict[str, Pos]) -> list[str]:
-    """One action applied to what is on screen; returns what is wrong with it. Drawings in the row stand
-    apart from the rest: several performer drawings may be in it, as the stages of one life."""
+    """One action applied to what is on screen; returns what is wrong with it. The performer is one drawing
+    at a time, or it looks like two creatures. Only the stages of a row or ring may be several of its drawings,
+    as the stages of one life, and then none stands outside them."""
     what = f"{beat.id} {a.verb} at {a.at:g}"
     if a.verb in BY_CODE:
         return [f"{what}: our code adds {a.verb}; leave it out"]
@@ -159,25 +200,28 @@ def _apply(a: Action, beat: Beat, drawings: dict[str, Drawing], on: dict[str, Po
     thing = drawings.get(a.drawing or "")
     if thing is None or thing.kind == DrawingKind.BACKGROUND:
         return found + [f"{what}: drawing {a.drawing!r} is not a listed performer, object or icon"]
-    row = [d for d, p in on.items() if p == Pos.ROW and d != a.drawing]
-    rest = [d for d, p in on.items() if p != Pos.ROW and d != a.drawing]
+    row = [d for d, p in on.items() if p in KEPT_CLEAR and d != a.drawing]
+    rest = [d for d, p in on.items() if p not in KEPT_CLEAR and d != a.drawing]
     taken = next((d for d in rest if on[d] == a.pos), None)
-    if a.pos == Pos.ROW:                                        # a row needs the middle of the screen to itself
-        taken = next((d for d in rest if on[d] in MIDDLE), None)
-    elif a.pos in MIDDLE and row:
+    if a.pos in KEPT_CLEAR:                                     # a row or ring needs its part of the screen to itself
+        taken = next((d for d in rest if on[d] in KEPT_CLEAR[a.pos]), None) or next(
+            (d for d in row if on[d] != a.pos), None)
+    elif row and a.pos in KEPT_CLEAR[on[row[0]]]:
         taken = row[0]
     other = next((d for d in rest if drawings[d].kind == DrawingKind.PERFORMER), None)
-    twice = f"{what}: {other} is on screen; only one performer drawing at a time, so swap that one instead"
+    stage = next((d for d in row if drawings[d].kind == DrawingKind.PERFORMER), None)
+    twice = (f"{what}: {other or stage} is on screen; the performer is one drawing at a time, or it looks like two "
+             "creatures, so swap that one instead, or hide it first")
     spot = f"{what}: {a.pos} is taken by {taken}; hide or move it first" if taken else f"{what}: pos is needed"
     if a.verb == Verb.SHOW:
         if a.drawing in on:
             found.append(f"{what}: {a.drawing} is already on screen; move it instead")
-        elif thing.kind == DrawingKind.PERFORMER and other and a.pos != Pos.ROW:
+        elif thing.kind == DrawingKind.PERFORMER and (other or stage and a.pos not in KEPT_CLEAR):
             found.append(twice)
         elif a.pos is None or taken:
             found.append(spot)
-        elif a.pos == Pos.ROW and len(row) == MAX_ROW:
-            found.append(f"{what}: the row is full; at most {MAX_ROW} stages in a row")
+        elif a.pos in KEPT_CLEAR and len(row) == MAX_ROW:
+            found.append(f"{what}: the {a.pos} is full; at most {MAX_ROW} stages in a {a.pos}")
         else:
             on[a.drawing] = a.pos
             if len(on) - len(row) > MAX_ON_SCREEN:
@@ -190,19 +234,22 @@ def _apply(a: Action, beat: Beat, drawings: dict[str, Drawing], on: dict[str, Po
         new = drawings.get(a.to or "")
         if new is None or new.kind == DrawingKind.BACKGROUND or a.to in on:
             found.append(f"{what}: to {a.to!r} must be a listed performer, object or icon that is not on screen")
-        elif new.kind == DrawingKind.PERFORMER and other:
+        elif new.kind == DrawingKind.PERFORMER and (other or stage and on[a.drawing] not in KEPT_CLEAR):
             found.append(twice)
         else:
             on[a.to] = on.pop(a.drawing)
     elif a.verb == Verb.MOVE:
-        if a.pos == Pos.ROW:
-            found.append(f"{what}: a drawing joins the row with show, not move")
+        if a.pos in KEPT_CLEAR:
+            found.append(f"{what}: a drawing joins the {a.pos} with show, not move")
         elif a.pos is None or taken:
             found.append(spot)
+        elif thing.kind == DrawingKind.PERFORMER and (other or stage):
+            found.append(twice)
         else:
             on[a.drawing] = a.pos
-    elif a.verb == Verb.ZOOM and (a.scale is None or not ZOOM_SCALE[0] <= a.scale <= ZOOM_SCALE[1]):
-        found.append(f"{what}: scale must be between {ZOOM_SCALE[0]} and {ZOOM_SCALE[1]}")
+    elif a.verb == Verb.ZOOM and (a.scale is None or not ZOOM_LEAST <= a.scale <= ZOOM_MOST[thing.kind]):
+        found.append(f"{what}: scale must be between {ZOOM_LEAST} and {ZOOM_MOST[thing.kind]}; a {thing.kind} drawing "
+                     "any bigger does not fit the screen, so start it smaller to leave room to grow")
     return found
 
 
@@ -221,8 +268,7 @@ def finish(scripts: list[BeatScriptDraft], beats: list[Beat], screens: list[Scre
         if beat.number_text and beat.number_text.lower() != (beat.keyword or "").lower():
             sung = [w for w in words if w.line_index in beat.lines]
             extra.append(_text(Verb.NUMBER, beat.number_text, sung_at(beat.number_text, sung), beat, duration))
-        if screen.singer:
-            extra.append(Action(verb=Verb.LIPSYNC, drawing=screen.singer, at=beat.start, until=beat.end))
+        extra += [Action(verb=Verb.LIPSYNC, drawing=who, at=at, until=until) for who, at, until in screen.sung]
         out.append(BeatScript(beat=beat.id, background=script.background,
                               actions=sorted(script.actions + extra, key=lambda a: a.at),
                               start=beat.start, end=beat.end, type=beat.type))
