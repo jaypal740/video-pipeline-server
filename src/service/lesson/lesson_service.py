@@ -1,6 +1,5 @@
 import hashlib
 import logging
-from pathlib import Path
 
 from src.core.configs import Settings
 from src.repository.asset.asset_repository import AssetRepository
@@ -12,9 +11,10 @@ from src.schema.lesson.lesson_schema import GradeBand, LessonDraft, LessonPlan, 
 from src.schema.run.run_schema import Run
 from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_analysis_schema import LyricLine
-from src.service.intake.intake_jamwise import JAMWISE_FILE, read_export
-from src.service.lesson.lesson_prompt import PROMPT_VERSION, SYSTEM, featured_terms, jamwise_direction, user_prompt
-from src.service.lesson.lesson_rules import allowed_types, problems
+from src.service.intake.intake_jamwise import export_beside
+from src.service.lesson.lesson_prompt import (JAMWISE_SYSTEM, PROMPT_VERSION, SYSTEM, featured_terms,
+                                              jamwise_direction, sequence_limit, user_prompt)
+from src.service.lesson.lesson_rules import MAX_SEQUENCES, allowed_types, problems
 from src.service.llm.llm_service import LlmError, LlmService
 from src.service.stage.stage_common import add_llm_cost, fail_stage
 
@@ -44,9 +44,11 @@ class LessonService:
         lines = self._lines(run)
         export = self._jamwise(run)
         featured = featured_terms(export) if export else []
+        most = sequence_limit(export) if export else MAX_SEQUENCES
+        system = JAMWISE_SYSTEM if export else SYSTEM
         model = model or run.model_pins.get(StageName.LESSON) or self._settings.lesson_model
         prompt = user_prompt(lines, band, types, run.brief, jamwise_direction(export) if export else None)
-        key = hashlib.sha256(f"{PROMPT_VERSION}|{model}|{SYSTEM}|{prompt}".encode()).hexdigest()
+        key = hashlib.sha256(f"{PROMPT_VERSION}|{model}|{system}|{prompt}".encode()).hexdigest()
 
         state = self._runs.stage(run.id, StageName.LESSON)
         if state is not None and not force and state.status == StageStatus.DONE and state.input_hash == key:
@@ -59,8 +61,8 @@ class LessonService:
         state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
         state = self._runs.stage_states.update(state)
         try:
-            draft, call = self._llm.parse(model, SYSTEM, prompt, LessonDraft,
-                                          check=lambda d: problems(d, lines, band, types, featured))
+            draft, call = self._llm.parse(model, system, prompt, LessonDraft,
+                                          check=lambda d: problems(d, lines, band, types, featured, most))
         except LlmError as exc:
             add_llm_cost(self._assets, run.id, StageName.LESSON, exc.call)
             fail_stage(self._runs, state, exc, logger, "lesson")
@@ -94,5 +96,4 @@ class LessonService:
 
     def _jamwise(self, run: Run) -> dict | None:
         """The song's JamWise export, if it came from JamWise."""
-        export = Path(self._songs.songs.get(run.song_id).audio_path).parent / JAMWISE_FILE
-        return read_export(export) if export.is_file() else None
+        return export_beside(self._songs.songs.get(run.song_id).audio_path)

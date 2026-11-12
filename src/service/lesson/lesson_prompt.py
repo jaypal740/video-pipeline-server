@@ -7,13 +7,24 @@ from src.service.lesson.lesson_rules import (MAX_SEQUENCE_SECONDS, MAX_SEQUENCES
 # Bumped whenever the prompt changes, so every run is planned again with the new prompt.
 PROMPT_VERSION = "lesson.v5"
 
-SYSTEM = f"""You plan short educational music videos for school classes. The song already exists and \
+_PEOPLE_ONLY = ("Only people, such as a narrator or presenter, are characters. Cells, germs, molecules, animals, "
+                "objects and ideas look and behave as they really do: never cartoon faces, eyes or human expressions "
+                "on them, and no invented mascots or metaphors standing in for the real thing.")
+# A JamWise song comes with its own characters, who take the place of the host.
+_PLAN_CHARACTERS = ("The song's plan names its characters, and they are the video's characters: the lead performs "
+                    "the song and acts in the scenes as the plan says, and the others appear where the plan puts "
+                    "them. A character that is an animal or a thing may have a face and feelings, but its body, its "
+                    "life stages and what it does stay true to the real thing. Everything else, cells, germs, "
+                    "molecules, other animals and objects, looks and behaves as it really does: no faces on them "
+                    "and no other invented mascots.")
+
+
+def _system(characters: str, singer: str) -> str:
+    return f"""You plan short educational music videos for school classes. The song already exists and \
 drives the video: you never change its words or order, you decide what each line teaches and what the \
 viewer sees while it is sung.
 
-Only people, such as a narrator or presenter, are characters. Cells, germs, molecules, animals, objects and \
-ideas look and behave as they really do: never cartoon faces, eyes or human expressions on them, and no \
-invented mascots or metaphors standing in for the real thing.
+{characters}
 
 For every lyric line give:
 - teaches: the one idea the line teaches, in plain words.
@@ -21,7 +32,7 @@ For every lyric line give:
 doing real things, filmed where they really are, never a picture of them on a screen, card, poster or \
 window. No written words, labels, charts or diagrams in the picture; our code adds any text.
 - tag, exactly one of:
-  - face_to_camera: a person (the narrator or a presenter) sings the line straight to the viewer. Use it for hooks, choruses and \
+  - face_to_camera: {singer} sings the line straight to the viewer. Use it for hooks, choruses and \
 lines that address the viewer, within the limit you are given.
   - number: the line's point is a figure (a year, an amount, a percentage). Put the figure in \
 number_text exactly as it is written in the line; our code draws it on screen as it is sung.
@@ -60,16 +71,44 @@ and must_not_teach: wrong ideas the pictures must not teach. Be factually accura
 or misleading, say so in must_not_teach rather than illustrating the error."""
 
 
+SYSTEM = _system(_PEOPLE_ONLY, "a person (the narrator or a presenter)")
+JAMWISE_SYSTEM = _system(_PLAN_CHARACTERS, "the plan's lead")
+
+
 def jamwise_direction(export: dict) -> str:
-    """What JamWise planned the song to teach, as direction for the lesson: its goals, facts, vocabulary and
-    how it meant to demonstrate each concept. Its characters' looks are left out: our pipeline designs them."""
+    """JamWise's plan for the song, which the lesson follows: its scenes become the sequences, with its goals,
+    characters, facts, vocabulary and how it meant to demonstrate each concept."""
     brief, package = export.get("creativeBrief") or {}, export.get("contentPackage") or {}
-    parts = ["The song was written from this plan. Follow its topics, terms and numbers, but check every fact: "
-             "where the plan is wrong, teach what is true."]
+    world = brief.get("visualWorld") or {}
+    parts = ["The song was written from this plan, and the video follows it. Build the sequences from the "
+             "plan's scenes, in the plan's order: each scene is one sequence, set in the scene's place, with its "
+             "change and steps taken from what the scene says happens and how it shows the idea. The section "
+             "notes say which scenes a verse or bridge holds; give each scene the lines that sing about it. Each "
+             "chorus is its own sequence showing the chorus picture, and the last sequence closes on the ending "
+             "picture. Scenes set in the same location share one place. Join a scene to the next one only when "
+             "it is too short to be a sequence alone, keeping both scenes' steps in order; a scene no line sings "
+             "about gets no sequence. A line's show is the moment of its scene that happens while that line is "
+             f"sung, not a new picture of its own. This song may use up to {sequence_limit(export)} sequences.",
+             "The plan was written before the song was finished and is not always right. Check every fact in "
+             "the plan and the lyrics, show what is true, and put each wrong idea in must_not_teach. Where the "
+             "plan writes a word or figure into the picture, leave it out: our code labels terms and draws "
+             "numbers. Leave out anything a character says that the song does not sing. Show an animal or thing "
+             "once in a picture, never two of it side by side. The plan's characters are listed below; where a "
+             "rule says host, narrator or presenter, that is the plan's lead."]
     parts += [f"- Learning goal: {g}" for g in package.get("learningObjectives", [])]
-    parts += [f"- Scene {s.get('id')}: {s.get('title')}: teaches {s.get('teaches')}" for s in brief.get("scenes", [])]
-    parts += [f"- Section {s.get('section')}: {s.get('educationalFocus')}" for s in brief.get("sectionPlans", [])]
-    parts += [f"- Number: {a.get('statistic')}" for a in brief.get("numberAnchors", [])]
+    parts += [f"- Character {c.get('name')} ({c.get('role')}): {c.get('concept')}. Looks like: "
+              f"{c.get('visualDescription')}" for c in brief.get("cast", []) if c.get("name")]
+    parts += [f"- Scene {s.get('id')}: {s.get('title')}. Place: {s.get('place')}. Happens: {s.get('situation')} "
+              f"Seen: {s.get('visualDescription')} Shows the idea: "
+              f"{(s.get('teachingMoment') or {}).get('visualDemonstration')} Teaches: {s.get('teaches')}"
+              for s in brief.get("scenes", [])]
+    parts += [f"- Section {s.get('section')}: {s.get('narrativeGoal')} Teaches: {s.get('educationalFocus')}"
+              for s in brief.get("sectionPlans", [])]
+    if world.get("chorusVisual"):
+        parts.append(f"- Chorus picture: {world['chorusVisual']}")
+    if brief.get("loopVisual"):
+        parts.append(f"- Ending picture: {brief['loopVisual']}")
+    parts += [f"- Number: {a.get('statistic')} Shown as: {a.get('visual')}" for a in brief.get("numberAnchors", [])]
     parts += [f"- Fact: {f.get('kidVersion') or f.get('fact')} {f.get('explanation') or ''}".rstrip()
               for f in package.get("keyFacts", [])]
     parts += [f"- Wrong idea to avoid: {f.get('misconception')}" for f in package.get("keyFacts", [])
@@ -90,6 +129,13 @@ def jamwise_direction(export: dict) -> str:
 
 def featured_terms(export: dict) -> list[str]:
     return [t["word"] for t in (export.get("creativeBrief") or {}).get("featuredTerms", []) if t.get("word")]
+
+
+def sequence_limit(export: dict) -> int:
+    """How many sequences a JamWise song may have: one per scene of its plan and one per chorus."""
+    scenes = (export.get("creativeBrief") or {}).get("scenes", [])
+    choruses = [s for s in export.get("sections", []) if s.get("type") == "chorus"]
+    return max(MAX_SEQUENCES, len(scenes) + len(choruses))
 
 
 def user_prompt(lines: list[LyricLine], band: GradeBand, types: list[VideoType], brief: str | None,

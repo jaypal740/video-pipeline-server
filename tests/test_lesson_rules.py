@@ -3,7 +3,7 @@ import pytest
 from src.schema.lesson.lesson_schema import (GradeBand, KeyTerm, LessonDraft, LessonLine, LessonSequence, LineTag,
                                              VideoType)
 from src.schema.song.song_analysis_schema import LyricLine
-from src.service.lesson.lesson_prompt import jamwise_direction, user_prompt
+from src.service.lesson.lesson_prompt import jamwise_direction, sequence_limit, user_prompt
 from src.service.lesson.lesson_rules import (allowed_types, band_for, band_rules, face_limit, format_rules, problems,
                                              repeats, sequence_problems)
 
@@ -118,9 +118,24 @@ def test_the_jamwise_plan_gives_the_lesson_its_facts_terms_and_demonstrations():
         "vocabularyCards": [{"term": "corona", "kidDefinition": "The Sun's outer layer.", "nonExamples": ["sunspot"]}],
         "wowFact": {"fact": "So much energy."}},
         "creativeBrief": {"teachingMoments": [{"concept": "Fusion vs burning", "visualDemonstration": "Candle beside it"}],
-                          "featuredTerms": [{"word": "corona"}]}}
+                          "featuredTerms": [{"word": "corona"}],
+                          "cast": [{"name": "Vex", "role": "lead", "concept": "The Sun itself",
+                                    "visualDescription": "A lean figure"}],
+                          "scenes": [{"id": i, "title": "The Core", "place": "Inside the Sun", "situation": "Atoms slam.",
+                                      "visualDescription": "White heat.", "teaches": "Fusion makes helium",
+                                      "teachingMoment": {"visualDemonstration": "Two atoms join"}} for i in range(1, 7)],
+                          "sectionPlans": [{"section": "verse1", "narrativeGoal": "Into the core (Scene 1)",
+                                            "educationalFocus": "fusion"}],
+                          "visualWorld": {"chorusVisual": "The Sun blazing"}, "loopVisual": "Back to the black void"},
+        "sections": [{"type": "chorus"}, {"type": "verse"}, {"type": "chorus"}, {"type": "chorus"}]}
     text = jamwise_direction(export)
-    for part in ("- Learning goal: Explain fusion", "- Fact: The Sun is a ball of gas. Gravity holds it.",
+    assert sequence_limit(export) == 9 and sequence_limit({}) == 8        # six scenes and three choruses
+    for part in ("- Character Vex (lead): The Sun itself. Looks like: A lean figure", "This song may use up to 9 sequences.",
+                 "- Scene 1: The Core. Place: Inside the Sun. Happens: Atoms slam. Seen: White heat. Shows the "
+                 "idea: Two atoms join Teaches: Fusion makes helium",
+                 "- Section verse1: Into the core (Scene 1) Teaches: fusion", "- Chorus picture: The Sun blazing",
+                 "- Ending picture: Back to the black void",
+                 "- Learning goal: Explain fusion", "- Fact: The Sun is a ball of gas. Gravity holds it.",
                  "- Wrong idea to avoid: It burns like a campfire.",
                  "- Term corona: The Sun's outer layer. Not to be confused with: sunspot",
                  "- How to show Fusion vs burning: Candle beside it", "- Wow fact: So much energy.",

@@ -89,15 +89,15 @@ def place_limit(band: GradeBand) -> int:
 
 
 def sequence_problems(draft: LessonDraft, lines: list[LyricLine], featured: list[str],
-                      band: GradeBand | None = None) -> list[str]:
+                      band: GradeBand | None = None, most: int = MAX_SEQUENCES) -> list[str]:
     """Sequences cover every line once in order, are long enough to show a topic unfolding, keep a chorus
     sung again in its first place, name the terms their lines sing, and say what they show and how."""
     seqs = draft.sequences
     if not seqs:
         return ["sequences must group every line into topic sequences"]
     found = []
-    if len(seqs) > MAX_SEQUENCES:
-        found.append(f"{len(seqs)} sequences; at most {MAX_SEQUENCES} are allowed")
+    if len(seqs) > most:
+        found.append(f"{len(seqs)} sequences; at most {most} are allowed")
     indexes = [l.index for l in lines]
     covered = [i for q in seqs for i in range(q.first_line, q.last_line + 1)]
     if covered != indexes:
@@ -155,7 +155,7 @@ def sequence_problems(draft: LessonDraft, lines: list[LyricLine], featured: list
 
 
 def problems(draft: LessonDraft, lines: list[LyricLine], band: GradeBand, types: list[VideoType],
-             featured: list[str] | None = None) -> list[str]:
+             featured: list[str] | None = None, most: int = MAX_SEQUENCES) -> list[str]:
     """What the schema cannot check. An empty list means the draft is usable."""
     found = []
     if [l.index for l in draft.lines] != [l.index for l in lines]:
@@ -184,4 +184,4 @@ def problems(draft: LessonDraft, lines: list[LyricLine], band: GradeBand, types:
         limit = face_limit(band, draft.video_type, len(lines))
         if faces > limit:
             found.append(f"{faces} lines are face_to_camera; at most {limit} are allowed for this band and type")
-    return found + sequence_problems(draft, lines, featured or [], band)
+    return found + sequence_problems(draft, lines, featured or [], band, most)

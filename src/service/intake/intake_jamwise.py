@@ -20,6 +20,12 @@ def read_export(path: Path) -> dict:
     return result
 
 
+def export_beside(audio_path: str) -> dict | None:
+    """The JamWise export kept next to a song's audio, if the song came from JamWise."""
+    export = Path(audio_path).parent / JAMWISE_FILE
+    return read_export(export) if export.is_file() else None
+
+
 def jamwise_lines(timing: list[dict], lyrics: list[str], duration: float) -> tuple[list[TimedWord], list[LyricLine]]:
     """JamWise's own line and word timing as our timed lyrics, checked against the lyrics and the audio."""
     if len(timing) != len(lyrics):
