@@ -87,7 +87,8 @@ class LessonSequence(BaseModel):
     to its last; terms: the key terms its lines name and its pictures show; fact: what a viewer must
     understand from the pictures alone, with the sound off; steps: the visible stages that show it, in order;
     shown_terms: key terms its pictures show and name although its lines don't sing them (the corona, when
-    explaining the Sun's layers)."""
+    explaining the Sun's layers); scenes: the scenes of the song's own plan it is built from, in order, none
+    for a chorus or a song without a plan."""
 
     first_line: int
     last_line: int
@@ -98,6 +99,7 @@ class LessonSequence(BaseModel):
     fact: str = ""
     steps: list[str] = Field(default_factory=list)
     shown_terms: list[str] = Field(default_factory=list)
+    scenes: list[int] = Field(default_factory=list)
 
 
 class LessonDraft(BaseModel):

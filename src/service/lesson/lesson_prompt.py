@@ -91,10 +91,13 @@ def jamwise_direction(export: dict) -> str:
              "change and steps taken from what the scene says happens and how it shows the idea. The section "
              "notes say which scenes a verse or bridge holds; give each scene the lines that sing about it. Each "
              "chorus is its own sequence showing the chorus picture, and the last sequence closes on the ending "
-             "picture. Scenes set in the same location share one place. Join a scene to the next one only when "
+             "picture. A sequence's steps show what its own lines sing, in the order they sing it. A chorus sung "
+             "again may look different, but its steps still show what its lines name. Scenes set in the same location share one place. Join a scene to the next one only when "
              "it is too short to be a sequence alone, keeping both scenes' steps in order; a scene no line sings "
              "about gets no sequence. A line's show is the moment of its scene that happens while that line is "
-             f"sung, not a new picture of its own. This song may use up to {sequence_limit(export)} sequences.",
+             f"sung, not a new picture of its own. This song may use up to {sequence_limit(export)} sequences. "
+             "For each sequence give scenes: the ids of the plan's scenes it is built from, in order, and none "
+             "for a chorus.",
              "The plan was written before the song was finished and is not always right. Check every fact in "
              "the plan and the lyrics, show what is true, and put each wrong idea in must_not_teach. Where the "
              "plan writes a word or figure into the picture, leave it out: our code labels terms and draws "
@@ -135,6 +138,10 @@ def jamwise_direction(export: dict) -> str:
 
 def featured_terms(export: dict) -> list[str]:
     return [t["word"] for t in (export.get("creativeBrief") or {}).get("featuredTerms", []) if t.get("word")]
+
+
+def scene_ids(export: dict) -> list[int]:
+    return [s["id"] for s in (export.get("creativeBrief") or {}).get("scenes", []) if "id" in s]
 
 
 def sequence_limit(export: dict) -> int:

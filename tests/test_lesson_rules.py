@@ -5,7 +5,7 @@ from src.schema.lesson.lesson_schema import (GradeBand, KeyTerm, LessonDraft, Le
 from src.schema.song.song_analysis_schema import LyricLine
 from src.service.lesson.lesson_prompt import jamwise_direction, sequence_limit, user_prompt
 from src.service.lesson.lesson_rules import (allowed_types, band_for, band_rules, clear_keywords, face_limit,
-                                             format_rules, problems, repeats, sequence_problems)
+                                             format_rules, problems, repeats, scene_notes, sequence_problems)
 
 LINES = [LyricLine(index=i, text=t, start=i, end=i + 1, confidence=0.9, unclear=(i == 2))
          for i, t in enumerate(["This is a colony.", "In 1858 it grew.", "Mumble words.", "Sing it with me!"])]
@@ -187,3 +187,13 @@ def test_a_keyword_is_kept_only_when_its_own_clear_line_sings_it():
     dropped = clear_keywords(plan, LINES)
     assert [e.keyword for e in plan.lines] == ["Colony", None, None, None]      # not sung, unclear line, too long
     assert len(dropped) == 3 and dropped[0].startswith("line 1: keyword 'bacteria' dropped")
+
+
+def test_sequences_that_leave_the_plans_scenes_are_noted():
+    def built(*scenes) -> LessonDraft:
+        return draft(sequences=[draft().sequences[0].model_copy(update={"scenes": list(s)}) for s in scenes])
+    assert scene_notes(built([1], [], [2, 3]), [1, 2, 3]) == []                    # a chorus has none; two may join
+    assert scene_notes(built([2], [1], [3]), [1, 2, 3]) == [
+        "the sequences take the plan's scenes in the order [2, 1, 3], not the plan's [1, 2, 3]"]
+    notes = scene_notes(built([1], [7]), [1, 2])
+    assert "scene 7, which the plan does not have" in notes[0] and notes[1].endswith("scene(s) [2]")

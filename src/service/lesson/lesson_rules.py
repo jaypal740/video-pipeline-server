@@ -97,6 +97,22 @@ def clear_keywords(draft: LessonDraft, lines: list[LyricLine]) -> list[str]:
     return dropped
 
 
+def scene_notes(draft: LessonDraft, planned: list[int]) -> list[str]:
+    """Where the sequences leave the song's own plan: a scene the plan does not have, scenes out of the plan's
+    order, and a planned scene no sequence is built from. Notes for us to read, not problems to ask again
+    about: the song decides, and a scene no line sings about rightly gets no sequence."""
+    used = [s for q in draft.sequences for s in q.scenes]
+    notes = [f"sequence {q.first_line}-{q.last_line} is built from scene {s}, which the plan does not have"
+             for q in draft.sequences for s in q.scenes if s not in planned]
+    known = [s for s in used if s in planned]
+    if [planned.index(s) for s in known] != sorted(planned.index(s) for s in known):
+        notes.append(f"the sequences take the plan's scenes in the order {known}, not the plan's {planned}")
+    unused = [s for s in planned if s not in used]
+    if unused:
+        notes.append(f"no sequence is built from the plan's scene(s) {unused}")
+    return notes
+
+
 def step_seconds(band: GradeBand) -> float:
     """The least a step may last: a shot of the band's longest length, so every step can get a shot."""
     return max(MIN_STEP_SECONDS, band_rules(band).shot_seconds[1])

@@ -13,8 +13,8 @@ from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_analysis_schema import LyricLine
 from src.service.intake.intake_jamwise import export_beside
 from src.service.lesson.lesson_prompt import (JAMWISE_SYSTEM, PROMPT_VERSION, SYSTEM, featured_terms,
-                                              jamwise_direction, sequence_limit, user_prompt)
-from src.service.lesson.lesson_rules import MAX_SEQUENCES, allowed_types, clear_keywords, problems
+                                              jamwise_direction, scene_ids, sequence_limit, user_prompt)
+from src.service.lesson.lesson_rules import MAX_SEQUENCES, allowed_types, clear_keywords, problems, scene_notes
 from src.service.llm.llm_service import LlmError, LlmService
 from src.service.stage.stage_common import add_llm_cost, fail_stage
 
@@ -75,7 +75,7 @@ class LessonService:
         for entry in draft.lines:                         # intake decides what is unclear, not the model
             if entry.index in unclear:
                 entry.tag, entry.number_text = LineTag.UNCLEAR, None
-        for note in clear_keywords(draft, lines):
+        for note in clear_keywords(draft, lines) + (scene_notes(draft, scene_ids(export)) if export else []):
             logger.warning("lesson %s: %s", run.id[:8], note)
         plan = LessonPlan(**draft.model_dump(), grade_band=band, model=model, prompt_version=PROMPT_VERSION)
         state.status, state.output, state.finished_at = StageStatus.DONE, plan.model_dump(mode="json"), utcnow()
