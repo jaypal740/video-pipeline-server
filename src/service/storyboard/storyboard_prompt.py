@@ -30,14 +30,23 @@ _FOLLOW = ("Follow the lesson's idea for each line; change it only when continui
            "teaches.",
            "The picture slots of a sequence are cut by time, not by line: spread the sequence's steps over them in "
            "order, moving on to the next step when the words reach it. A step that has several slots is held "
-           "across them, each shot showing it further along or closer, so the viewer has time to understand it.")
+           "across them, each shot showing it further along or closer, so the viewer has time to understand it. "
+           "Each shot shows the step its sung words are about: what a line names is on screen while it is sung, "
+           "and a character it names is in the shot.")
+# A song with its own characters has its sequences written at the same time, so the header says how each opens.
+_OPENS = ("", " opens: one or two plain sentences on how things stand when the sequence opens: where each "
+          "character is and in which form, what has changed for good by then, where a thing that stays put is "
+          "fixed, and whether it opens earlier or later than the sequence before it ends. The sequences are "
+          "written at the same time, each from its own opens and the next one's, so together they tell one "
+          "unbroken story: what one sequence leaves is what the next opens with.")
 _SUNG = ("In a sung shot the host sings to camera inside one of this video's walkable places, in the chosen outfit; "
          "declare a fitting walkable place if none exists.",
          "In a sung shot the lead sings to camera, in the form it has at that point of the story and in a place of "
          "its sequence; list it first in subjects.")
 
 
-def _system(kinds: str, given: str, outfit: str, characters: str, singer: str, follow: str, sung: str) -> str:
+def _system(kinds: str, given: str, outfit: str, characters: str, singer: str, follow: str, sung: str,
+            opens: str) -> str:
     return f"""You storyboard short educational music videos for school classes. The song, its lesson plan \
 and the shot timings already exist; you decide what each shot shows and how the camera films it. An image \
 model draws each shot's opening frame from your words and a video model animates it, so write only what \
@@ -66,7 +75,7 @@ size and far views from where they really are. Every step of the sequence must h
 among the home and zooms. Leave zooms empty when the home shows everything. times, when the sequence \
 passes through other hours: the home location declared again as its own place with that lighting (the \
 same field at night, at dusk), so a night shot is drawn from a night plate. A shot that opens at night, \
-dusk, noon or dawn is set in a place lit for that hour.
+dusk, noon or dawn is set in a place lit for that hour.{opens}
 
 Then, one sequence at a time, one shot per slot of that sequence:
 - place and subjects (up to 3 ids from cast). A subject must suit the place's scale: a hose-sized cable is \
@@ -127,8 +136,8 @@ lesson gives it, moving to its zoom place and back only where the topic changes 
 carries on from the shot before it; its last shot leads into the next sequence."""
 
 
-SYSTEM = _system(*(part[0] for part in (_KINDS, _GIVEN, _OUTFIT, _CHARACTERS, _SINGER, _FOLLOW, _SUNG)))
-STAR_SYSTEM = _system(*(part[1] for part in (_KINDS, _GIVEN, _OUTFIT, _CHARACTERS, _SINGER, _FOLLOW, _SUNG)))
+SYSTEM = _system(*(part[0] for part in (_KINDS, _GIVEN, _OUTFIT, _CHARACTERS, _SINGER, _FOLLOW, _SUNG, _OPENS)))
+STAR_SYSTEM = _system(*(part[1] for part in (_KINDS, _GIVEN, _OUTFIT, _CHARACTERS, _SINGER, _FOLLOW, _SUNG, _OPENS)))
 
 
 def characters_text(export: dict, star_look: str | None = None) -> str:
@@ -220,6 +229,8 @@ def sequence_prompt(user: str, header: BoardHeader, done: list[ShotDraft], k: in
     and the sequence opens its place itself."""
     after = (f"its last shot leads into sequence {k + 2}, {sequences[k + 1].topic}, in "
              f"{header.sequence_places[k + 1].home}" if k + 1 < len(sequences) else "its last shot ends the video")
+    if k + 1 < len(sequences) and header.sequence_places[k + 1].opens:
+        after += f", which opens like this: {header.sequence_places[k + 1].opens.rstrip('.')}"
     if alone:
         home = header.sequence_places[k].home
         before = ("it opens the video" if k == 0 else
@@ -229,7 +240,11 @@ def sequence_prompt(user: str, header: BoardHeader, done: list[ShotDraft], k: in
                 f"{header.model_dump_json()}\n\nNow write sequence {k + 1} of {len(sequences)}, {sequences[k].topic}, "
                 f"in {_where(header, k)}: one shot for each of the slots {', '.join(todo)}. The other sequences "
                 f"are written at the same time, so their shots are not shown: {before}, and its first picture "
-                f"shot in each place is wide or medium_wide; {after}.")
+                f"shot in each place is wide or medium_wide; {after}."
+                + (f" This sequence opens like this, and its first shot's start_state shows it: "
+                   f"{header.sequence_places[k].opens.rstrip('.')}. When that is an earlier or later time than the "
+                   "sequence before it ends, its first shot comes in on a dissolve."
+                   if header.sequence_places[k].opens else ""))
     before = "\n".join(s.model_dump_json() for s in done) or "none yet; this sequence opens the video"
     return (f"{user}\n\nThe header, fixed for the whole video (use its ids; add no cast or places):\n"
             f"{header.model_dump_json()}\n\nShots written so far, in order:\n{before}\n\n"

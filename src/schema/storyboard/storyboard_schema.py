@@ -216,12 +216,14 @@ class StoryboardDraft(BaseModel):
 class SequencePlaces(BaseModel):
     """Where one lesson sequence is shown: its home place; up to two zoom places that show the same topic at
     other scales, one closer and one wider (the atoms inside the Sun's core; Earth's orbit where a satellite
-    is hit); and times: the home location declared again with other lighting (the field at night), so a
-    night shot is drawn from a night plate."""
+    is hit); times: the home location declared again with other lighting (the field at night), so a
+    night shot is drawn from a night plate; and opens: how things stand when the sequence opens, for
+    sequences written at the same time."""
 
     home: str
     zooms: list[str] = Field(default_factory=list)
     times: list[str] = Field(default_factory=list)      # the home location again at other times of day
+    opens: str = ""
 
 
 class BoardHeader(BaseModel):

@@ -1,12 +1,12 @@
 import pytest
 
-from src.schema.lesson.lesson_schema import GradeBand, VideoType
-from src.schema.storyboard.storyboard_schema import (Angle, Camera, CameraMove, CastKind, CastMember, Continuity,
-                                                     Direction, Motif, Motion, Moves, Place, Position, Scale,
-                                                     ScreenDirection, ShotDraft, ShotKind, ShotSize, Slot, Speed,
-                                                     StoryboardDraft, Transition)
+from src.schema.lesson.lesson_schema import GradeBand, LessonSequence, VideoType
+from src.schema.storyboard.storyboard_schema import (Angle, BoardHeader, Camera, CameraMove, CastKind, CastMember,
+                                                     Continuity, Direction, Motif, Motion, Moves, Place, Position,
+                                                     Scale, ScreenDirection, SequencePlaces, ShotDraft, ShotKind,
+                                                     ShotSize, Slot, Speed, StoryboardDraft, Transition)
 from src.service.lesson.lesson_rules import band_rules, format_rules
-from src.service.storyboard.storyboard_prompt import STAR_SYSTEM, characters_text
+from src.service.storyboard.storyboard_prompt import STAR_SYSTEM, characters_text, sequence_prompt
 from src.service.storyboard.storyboard_rules import (assemble, fix, header_problems, host_for, shot_problems,
                                                      star_problems)
 
@@ -252,3 +252,16 @@ def test_the_plans_characters_are_given_lead_first_with_another_look_when_asked(
                                        "- Fern (supporting): A leaf. Looks like: Wide and green")
     assert "- Pip (lead): A caterpillar. Looks like: Striped yellow\n" in characters_text(export, "Striped yellow")
     assert "host" not in STAR_SYSTEM and "star true" in STAR_SYSTEM
+
+
+def test_a_sequence_written_alone_is_told_how_it_opens_and_how_the_next_one_does():
+    topics = [LessonSequence(first_line=i, last_line=i, topic=t, place="deck", change="c") for i, t in
+              enumerate(["Laying", "Hauling"])]
+    def told(*opens) -> str:
+        places = [SequencePlaces(home="deck", opens=o) for o in opens]
+        return sequence_prompt("USER", BoardHeader(shape="s", cast=[], places=[], motifs=[], sequence_places=places),
+                               [], 0, topics, ["s01"], alone=True)
+    text = told("The cable lies coiled on the deck.", "The cable hangs over the stern.")
+    assert "start_state shows it: The cable lies coiled on the deck." in text
+    assert "in deck, which opens like this: The cable hangs over the stern." in text
+    assert "opens like this" not in told("", "")                # a header without them changes nothing
