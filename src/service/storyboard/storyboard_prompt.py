@@ -7,7 +7,38 @@ from src.service.storyboard.storyboard_rules import HOST, LIMITS
 # Bumped whenever the prompt changes, so every run is boarded again with the new prompt.
 PROMPT_VERSION = "storyboard.v11"
 
-SYSTEM = f"""You storyboard short educational music videos for school classes. The song, its lesson plan \
+# The sentences that differ between a video with our fixed host and a song that comes with its own
+# characters (JamWise), whose lead takes the host's place: (host wording, characters wording).
+_KINDS = ("kind person or thing",
+          "kind person, character (an animal or thing the song's plan gives a face) or thing")
+_GIVEN = ("The host and the host's place are given; never declare them.",
+          "The song's characters are given with the looks its plan describes: declare each one in cast with that "
+          "look, cut to the words that make it recognisable. Set star true on the lead, who sings to camera. A "
+          "character that changes form is one cast member per form, each with star true if it is the lead.")
+_OUTFIT = (f"- host_outfit, on every place where the host appears: what the host wears there, fitting that place "
+           "and the topic (beach clothes on a beach, a lab coat in a lab, a coat on a ship's deck), at most "
+           f"{LIMITS['outfit']} words of clothes and colours. Name one of the wardrobe kits you are given, or write "
+           "your own. Leave it out for places the host never appears in.\n", "")
+_CHARACTERS = ("Only people are characters. Cells, germs, molecules, animals, objects and ideas look and behave as "
+               "they really do: never faces, eyes or expressions on them, no mascots, no invented metaphors.",
+               "The song's characters are the only characters: they may have faces and feelings and act as the "
+               "lesson says, but their bodies, life stages and what they do stay true to the real thing. Cells, "
+               "germs, molecules, other animals, objects and ideas look and behave as they really do: never faces, "
+               "eyes or expressions on them, no other mascots.")
+_SINGER = ("the host", "the lead")
+_FOLLOW = ("Follow the lesson's idea for each line; change it only when continuity needs it, and keep what it "
+           "teaches.",
+           "The picture slots of a sequence are cut by time, not by line: spread the sequence's steps over them in "
+           "order, moving on to the next step when the words reach it. A step that has several slots is held "
+           "across them, each shot showing it further along or closer, so the viewer has time to understand it.")
+_SUNG = ("In a sung shot the host sings to camera inside one of this video's walkable places, in the chosen outfit; "
+         "declare a fitting walkable place if none exists.",
+         "In a sung shot the lead sings to camera, in the form it has at that point of the story and in a place of "
+         "its sequence; list it first in subjects.")
+
+
+def _system(kinds: str, given: str, outfit: str, characters: str, singer: str, follow: str, sung: str) -> str:
+    return f"""You storyboard short educational music videos for school classes. The song, its lesson plan \
 and the shot timings already exist; you decide what each shot shows and how the camera films it. An image \
 model draws each shot's opening frame from your words and a video model animates it, so write only what \
 can be seen, in plain concrete words.
@@ -15,19 +46,15 @@ can be seen, in plain concrete words.
 First declare, once for the whole video:
 - shape: one sentence on how the video moves from start to end, at most {LIMITS["shape"]} words.
 - cast: every person or thing seen in more than one shot. id in snake_case starting with a letter, unique \
-across cast and places; kind person or thing; look: \
+across cast and places; {kinds}; look: \
 the fixed appearance in at most {LIMITS["cast look"]} words (colours, materials, shapes, clothes); size: its \
 real size in at most {LIMITS["size"]} words; scale: the rung it is seen at (cosmic, planet, landscape, human, \
 object, microscopic, molecular). A thing that is replaced by a new one (a second cable, a new ship) is a new \
-cast member with its own id. The host and the host's place are given; never declare them.
+cast member with its own id. {given}
 - places: id, look in at most {LIMITS["place look"]} words, lighting in at most {LIMITS["lighting"]} words, \
 scale (cosmic, planet, landscape, human, object, microscopic, molecular) and walkable: true when a person \
 could really stand there (a deck, a shore, a lab), false for space, underwater, inside a cell.
-- host_outfit, on every place where the host appears: what the host wears there, fitting that place and \
-the topic (beach clothes on a beach, a lab coat in a lab, a coat on a ship's deck), at most \
-{LIMITS["outfit"]} words of clothes and colours. Name one of the wardrobe kits you are given, or write \
-your own. Leave it out for places the host never appears in.
-- motifs: visual codes kept all video, e.g. thing "antibiotic", rule "always a cyan liquid", the rule in at \
+{outfit}- motifs: visual codes kept all video, e.g. thing "antibiotic", rule "always a cyan liquid", the rule in at \
 most {LIMITS["motif rule"]} words. A motif is about appearance only (colour, material, shape), never about \
 where a thing is or what it does. Write each motif's rule into the look of the cast member or place it \
 belongs to, so every picture keeps it.
@@ -78,38 +105,52 @@ truck along with it, so no shot reads as a still.
 end_state is clearly different from its start_state across the whole frame.
 - A chorus sung again gets new shots: keep the chorus's place and look, move its idea further, and never \
 repeat an earlier shot.
-- Only people are characters. Cells, germs, molecules, animals, objects and ideas look and behave as they \
-really do: never faces, eyes or expressions on them, no mascots, no invented metaphors.
+- {characters}
 - Pictures carry no text, labels, charts, numbers or digits; our code draws every word and figure. Write \
 numbers as words only when they are counts of visible things.
 - Describe what is there, never what is absent: no "no", "not", "without" or "never".
 - No quotation marks anywhere.
 - A lyric line stays in one place. The first picture shot in a new place is wide or medium_wide, so the \
-viewer sees where we are; a sung close-up of the host does not count.
+viewer sees where we are; a sung close-up of {singer} does not count.
 - Within a place, keep the screen direction and change shot size gradually.
 - Lock the camera when the subject moves fast; keep the subject calm when the camera moves.
 - Number shots keep the main subject in a side third; the figure is drawn in the open side.
-- Write a shot for every slot you are given, sung slots included. In a sung shot the host sings to camera \
-inside one of this video's walkable places, in the chosen outfit; declare a fitting walkable place if none \
-exists. Code only adjusts the framing.
+- Write a shot for every slot you are given, sung slots included. {sung} Code only adjusts the framing.
 - In the same place, a shot starts where the shot before it ended: its start_state carries on from that \
 end_state, so the cut joins up.
 - A shot opens in the lighting of its place; a time-lapse may carry the light on within the clip, and the \
 next shot is set in the place lit for where it ends. Hours never jump inside a plain clip.
-- Follow the lesson's idea for each line; change it only when continuity needs it, and keep what it teaches.
+- {follow}
 - Use few places and come back to them: the video should feel like one connected film, not a slideshow.
 - Each sequence shows its topic unfolding in its home place, shot after shot, toward the change the \
 lesson gives it, moving to its zoom place and back only where the topic changes scale. Its first shot \
 carries on from the shot before it; its last shot leads into the next sequence."""
 
 
-def _slot_line(slot: Slot, lines: dict[int, LyricLine], plan: dict, sung: str | None = None) -> str:
+SYSTEM = _system(*(part[0] for part in (_KINDS, _GIVEN, _OUTFIT, _CHARACTERS, _SINGER, _FOLLOW, _SUNG)))
+STAR_SYSTEM = _system(*(part[1] for part in (_KINDS, _GIVEN, _OUTFIT, _CHARACTERS, _SINGER, _FOLLOW, _SUNG)))
+
+
+def characters_text(export: dict, star_look: str | None = None) -> str:
+    """A JamWise song's characters as its plan describes them, the lead first. star_look: another look for
+    the lead, when the plan's own does not draw well."""
+    cast = sorted((export.get("creativeBrief") or {}).get("cast", []), key=lambda c: c.get("role") != "lead")
+    return "\n".join(f"- {c.get('name')} ({c.get('role')}): {c.get('concept')}. Looks like: "
+                     f"{star_look if star_look and c.get('role') == 'lead' else c.get('visualDescription')}"
+                     for c in cast if c.get("name"))
+
+
+def _slot_line(slot: Slot, lines: dict[int, LyricLine], plan: dict, sung: str | None = None,
+               by_scene: bool = False) -> str:
+    """by_scene: a picture slot shows its sequence's steps, so it is given the words sung but no line's idea."""
     head = f"{slot.id} | {slot.start:.1f}-{slot.end:.1f}s ({slot.end - slot.start:.1f}s) | "
     if slot.kind == ShotKind.MUSIC:
         return head + "music, no lyrics"
     kind = {ShotKind.SUNG: "sung by the host to camera", ShotKind.NUMBER: f"number shot, code draws {slot.number_text}",
             ShotKind.ILLUSTRATE: "picture", ShotKind.UNCLEAR: "picture (the words may be misheard)"}[slot.kind]
     sung = f"sings: {sung}" if sung is not None else " / ".join(f"line {i}: {lines[i].text}" for i in slot.lines)
+    if by_scene and slot.kind in (ShotKind.ILLUSTRATE, ShotKind.UNCLEAR):
+        return head + f"{kind} | {sung}"
     ideas = " / ".join(f"teaches {plan[i].teaches}; idea: {plan[i].show}" for i in slot.lines)
     return head + f"{kind} | {sung} | {ideas}"
 
@@ -123,13 +164,23 @@ def _sequence_line(k: int, q: LessonSequence) -> str:
 
 
 def user_prompt(plan: LessonPlan, lines: list[LyricLine], slots: list[Slot], band: BandRules, fmt: FormatRules,
-                host: CastMember, wardrobe: dict[str, str], sung: dict[str, str] | None = None) -> str:
+                host: CastMember | None, wardrobe: dict[str, str], sung: dict[str, str] | None = None,
+                characters: str | None = None) -> str:
     """The whole film, given to every call: the lesson, the rules, every sequence and every slot. sung: the
-    words sung during each slot, so a line split across shots shows each shot its own words."""
+    words sung during each slot, so a line split across shots shows each shot its own words. characters: the
+    song's own characters, given in place of the host."""
+    who = (f"The song's characters, from its plan (where a rule above says host, that is the lead):\n{characters}\n"
+           "The lead acts in the scenes the lesson puts it in and sings to camera in sung shots."
+           if characters else
+           f"Host ({HOST}): {host.look} Size: {host.size}. Wardrobe kits: "
+           + "; ".join(f"{kit}: {outfit}" for kit, outfit in wardrobe.items())
+           + f". For a {fmt.type} video the usual kit is {fmt.host_outfit}; dress the host for each place."
+           + ("" if fmt.type == VideoType.PERSONALISED_HERO else " The host appears only in sung shots."))
     by_index = {l.index: l for l in lines}
     lesson = {l.index: l for l in plan.lines}
-    grouped = "\n".join(_sequence_line(k, q) + "".join(f"\n  {_slot_line(s, by_index, lesson, (sung or {}).get(s.id))}"
-                                                       for s in slots if s.sequence == k)
+    grouped = "\n".join(_sequence_line(k, q)
+                        + "".join(f"\n  {_slot_line(s, by_index, lesson, (sung or {}).get(s.id), characters is not None)}"
+                                  for s in slots if s.sequence == k)
                         for k, q in enumerate(plan.sequences))
     return (f"Topic: {plan.topic} ({plan.subject}). {plan.summary}\n"
             f"Must not teach: {'; '.join(plan.must_not_teach) or 'nothing listed'}.\n\n"
@@ -142,10 +193,7 @@ def user_prompt(plan: LessonPlan, lines: list[LyricLine], slots: list[Slot], ban
             + (f" A scale change of more than {fmt.max_scale_step} step between shots must carry the viewer: "
                "come in on a dissolve or match_cut, or let the shot before push in or pull back."
                if fmt.max_scale_step else "")
-            + f"\n\nHost ({HOST}): {host.look} Size: {host.size}. Wardrobe kits: "
-            + "; ".join(f"{kit}: {outfit}" for kit, outfit in wardrobe.items())
-            + f". For a {fmt.type} video the usual kit is {fmt.host_outfit}; dress the host for each place."
-            + ("" if fmt.type == VideoType.PERSONALISED_HERO else " The host appears only in sung shots.")
+            + f"\n\n{who}"
             + " Other people are welcome. A person who is clearly seen and comes back in a later shot is a cast "
               "member with kind person, listed in the subjects of every shot they are in. Passers-by, a crowd, or "
               "a hand holding something need no cast entry."
@@ -166,11 +214,22 @@ def _where(header: BoardHeader, k: int) -> str:
 
 
 def sequence_prompt(user: str, header: BoardHeader, done: list[ShotDraft], k: int, sequences: list[LessonSequence],
-                    todo: list[str]) -> str:
+                    todo: list[str], alone: bool = False) -> str:
     """One sequence's shots, written with the whole film in view: the fixed header, every shot so far, and
-    where the next sequence goes."""
+    where the next sequence goes. alone: every sequence is written at the same time, so no shots are shown
+    and the sequence opens its place itself."""
     after = (f"its last shot leads into sequence {k + 2}, {sequences[k + 1].topic}, in "
              f"{header.sequence_places[k + 1].home}" if k + 1 < len(sequences) else "its last shot ends the video")
+    if alone:
+        home = header.sequence_places[k].home
+        before = ("it opens the video" if k == 0 else
+                  f"it follows sequence {k}, {sequences[k - 1].topic}, in {header.sequence_places[k - 1].home}"
+                  + ("" if header.sequence_places[k - 1].home == home else ", so its first shot comes in on a dissolve"))
+        return (f"{user}\n\nThe header, fixed for the whole video (use its ids; add no cast or places):\n"
+                f"{header.model_dump_json()}\n\nNow write sequence {k + 1} of {len(sequences)}, {sequences[k].topic}, "
+                f"in {_where(header, k)}: one shot for each of the slots {', '.join(todo)}. The other sequences "
+                f"are written at the same time, so their shots are not shown: {before}, and its first picture "
+                f"shot in each place is wide or medium_wide; {after}.")
     before = "\n".join(s.model_dump_json() for s in done) or "none yet; this sequence opens the video"
     return (f"{user}\n\nThe header, fixed for the whole video (use its ids; add no cast or places):\n"
             f"{header.model_dump_json()}\n\nShots written so far, in order:\n{before}\n\n"

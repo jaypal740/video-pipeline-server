@@ -96,3 +96,18 @@ def test_the_intro_is_measured_after_snapping_to_the_beat():
     lines, lesson = song((3.3, 5.8, LineTag.ILLUSTRATE, None, "a"))
     slots = make_slots(lines, lesson, beats=[3.2], duration=5.8, shot_seconds=[3, 5])
     assert spans(slots)[0] == (0.0, 3.2, [], ShotKind.MUSIC)             # snapped back to 3.2 s, long enough
+
+
+def test_by_scene_the_pictures_are_cut_by_time_and_sung_lines_keep_their_own_shot():
+    lines, lesson = song((0.0, 2.0, LineTag.ILLUSTRATE, None, "a"), (2.0, 4.0, LineTag.ILLUSTRATE, None, "b"),
+                         (4.0, 6.0, LineTag.ILLUSTRATE, None, "c"), (6.0, 8.0, LineTag.ILLUSTRATE, None, "d"),
+                         (8.0, 12.0, LineTag.FACE_TO_CAMERA, None, "e"), (16.0, 18.0, LineTag.ILLUSTRATE, None, "f"))
+    by_line = make_slots(lines, lesson, beats=[], duration=18.0, shot_seconds=[3, 5])
+    assert [s.lines for s in by_line] == [[0, 1], [2, 3], [4], [], [5]]          # a shot per pair of short lines
+    slots = make_slots(lines, lesson, beats=[], duration=18.0, shot_seconds=[3, 5], by_scene=True)
+    assert spans(slots) == [(0.0, 4.0, [0, 1], ShotKind.ILLUSTRATE), (4.0, 8.0, [2, 3], ShotKind.ILLUSTRATE),
+                            (8.0, 12.0, [4], ShotKind.SUNG),                # the break and line f are one run,
+                            (12.0, 15.0, [], ShotKind.MUSIC), (15.0, 18.0, [5], ShotKind.ILLUSTRATE)]   # cut in two
+    long = song((0.0, 9.0, LineTag.ILLUSTRATE, None, "a"), (9.0, 10.0, LineTag.ILLUSTRATE, None, "b"))
+    slots = make_slots(*long, beats=[], duration=10.0, shot_seconds=[3, 5], by_scene=True)
+    assert spans(slots) == [(0.0, 5.0, [0], ShotKind.ILLUSTRATE), (5.0, 10.0, [0, 1], ShotKind.ILLUSTRATE)]

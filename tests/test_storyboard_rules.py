@@ -6,7 +6,9 @@ from src.schema.storyboard.storyboard_schema import (Angle, Camera, CameraMove, 
                                                      ScreenDirection, ShotDraft, ShotKind, ShotSize, Slot, Speed,
                                                      StoryboardDraft, Transition)
 from src.service.lesson.lesson_rules import band_rules, format_rules
-from src.service.storyboard.storyboard_rules import assemble, fix, header_problems, host_for, shot_problems
+from src.service.storyboard.storyboard_prompt import STAR_SYSTEM, characters_text
+from src.service.storyboard.storyboard_rules import (assemble, fix, header_problems, host_for, shot_problems,
+                                                     star_problems)
 
 BAND, FMT, HOST = band_rules(GradeBand.G3_5), format_rules(VideoType.JOURNEY), host_for(GradeBand.G3_5)
 
@@ -218,3 +220,35 @@ def test_a_sung_shot_needs_a_walkable_place_and_a_real_kit():
     assert "s01" not in found and "not walkable" in found["s02"][0] and "needs a host_outfit" in found["s03"][0]
     places[0].host_outfit = "a coat with 1858 printed on the back"
     assert any("host_outfit has digits" in p for p in header_problems(draft, BAND, s))
+
+
+def test_a_song_with_its_own_characters_has_a_star_who_sings():
+    pip = CastMember(id="pip", kind=CastKind.CHARACTER, look="A plump green caterpillar with big amber eyes",
+                     size="thumb sized", scale=Scale.HUMAN, star=True)
+    fern = CastMember(id="fern", kind=CastKind.CHARACTER, look="A wide leaf with sleepy eyes", size="hand sized",
+                      scale=Scale.HUMAN)
+    ship = CastMember(id="ship", kind=CastKind.THING, look="A wooden steamship", size="long", scale=Scale.LANDSCAPE)
+    assert star_problems([pip, fern, ship], starred=True) == []
+    assert "star true" in star_problems([fern, ship], starred=True)[0]
+    assert "person or character" in star_problems([ship.model_copy(update={"star": True})], starred=True)[0]
+    assert len(star_problems([pip, fern, ship], starred=False)) == 2          # our host's videos have neither
+    assert header_problems(board(shot("s01"), cast=[pip, fern, ship]), BAND, slots(ShotKind.SUNG)) == []
+
+    s = slots(ShotKind.SUNG, ShotKind.SUNG)
+    sung = shot("s01", subjects=["fern", "pip", "ship"], start_state="The caterpillar grins on the leaf")
+    assert fix(sung, s[0], BAND, {"pip", "fern"}, {"pip"}) and sung.subjects == ["pip", "ship"]
+    draft = board(sung, shot("s02"), cast=[pip, fern, ship])
+    found = shot_problems(draft, s, BAND, FMT, None)                           # no host: the star sings anywhere
+    assert "s01" not in found and "list the star" in found["s02"][0]
+    draft.shots[1].subjects = ["pip"]
+    assert [x.performer for x in assemble(draft, s, None)[0]] == ["pip", "pip"]
+
+
+def test_the_plans_characters_are_given_lead_first_with_another_look_when_asked():
+    export = {"creativeBrief": {"cast": [
+        {"name": "Fern", "role": "supporting", "concept": "A leaf", "visualDescription": "Wide and green"},
+        {"name": "Pip", "role": "lead", "concept": "A caterpillar", "visualDescription": "Plump and green"}]}}
+    assert characters_text(export) == ("- Pip (lead): A caterpillar. Looks like: Plump and green\n"
+                                       "- Fern (supporting): A leaf. Looks like: Wide and green")
+    assert "- Pip (lead): A caterpillar. Looks like: Striped yellow\n" in characters_text(export, "Striped yellow")
+    assert "host" not in STAR_SYSTEM and "star true" in STAR_SYSTEM

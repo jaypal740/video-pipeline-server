@@ -17,10 +17,12 @@ class ShotKind(StrEnum):
 
 
 class CastKind(StrEnum):
-    """Only a person is a character; a thing looks and behaves as it really does."""
+    """A thing looks and behaves as it really does. A character is an animal or thing that a song's own plan
+    gives a face (a caterpillar, a leaf); only a song that comes with such a plan has one."""
 
     PERSON = "person"
     THING = "thing"
+    CHARACTER = "character"
 
 
 class Scale(StrEnum):
@@ -129,13 +131,15 @@ class Continuity(StrEnum):
 class CastMember(BaseModel):
     """A person or thing that appears in more than one shot. look is copied word for word into every
     image prompt it appears in, next to its reference sheet. scale: the rung it is seen at, so a
-    hose-sized cable is never the subject of a planet-wide shot."""
+    hose-sized cable is never the subject of a planet-wide shot. star: the lead of a song that comes with its
+    own characters, who sings to camera in place of the host; a lead that changes form has one member per form."""
 
     id: str
     kind: CastKind
     look: str
     size: str
     scale: Scale
+    star: bool = False
 
 
 class Place(BaseModel):

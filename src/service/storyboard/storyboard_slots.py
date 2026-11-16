@@ -99,6 +99,26 @@ def _merge_short(spans: list[_Span], low: float, high: float) -> list[_Span]:
     return out
 
 
+def _scene_runs(spans: list[_Span]) -> list[_Span]:
+    """By scene: neighbouring picture and music spans of one sequence become one run, cut into shots by time,
+    so a shot follows the scene and not a lyric line. Sung and number lines keep their own shots."""
+    free = (ShotKind.ILLUSTRATE, ShotKind.UNCLEAR, ShotKind.MUSIC)
+    out: list[_Span] = []
+    for span in spans:
+        prev = out[-1] if out else None
+        if prev is not None and prev.kind in free and span.kind in free and prev.seq == span.seq:
+            prev.end, prev.lines = span.end, prev.lines + span.lines
+        else:
+            out.append(span)
+    return out
+
+
+def _sung_in(start: float, end: float, run: list[int], lines: dict[int, LyricLine]) -> list[int]:
+    """The lines of a run sung during one of its shots: those with half a second, or half of themselves, in it."""
+    return [i for i in run
+            if min(end, lines[i].end) - max(start, lines[i].start) >= min(0.5, (lines[i].end - lines[i].start) / 2) - 1e-9]
+
+
 def _pieces(span: _Span, beats: list[float], low: float, high: float) -> list[tuple[float, float]]:
     """Cut a span into shots within the band's length; never into shots shorter than the band minimum, so a
     span just over the maximum stays one shot. Sung and number spans stay whole up to SUNG_MAX."""
@@ -121,17 +141,27 @@ def _pieces(span: _Span, beats: list[float], low: float, high: float) -> list[tu
 
 
 def make_slots(lines: list[LyricLine], lesson_lines: list[LessonLine], beats: list[float], duration: float,
-               shot_seconds: list[float], sequences: list[LessonSequence] | None = None) -> list[Slot]:
+               shot_seconds: list[float], sequences: list[LessonSequence] | None = None,
+               by_scene: bool = False) -> list[Slot]:
     """Cut the song into shots: each line split to the band's shot length on the beat, sung and number
     lines kept whole up to SUNG_MAX, and no shot across two sequences. A chorus sung again gets shots of
-    its own, never a copy of the first chorus's."""
+    its own, never a copy of the first chorus's. by_scene: the pictures of a sequence are cut by time alone,
+    so they follow the scene's steps and not its lines; each shot lists the lines sung during it."""
     low, high = shot_seconds
     lesson = {l.index: l for l in lesson_lines}
+    by_index = {l.index: l for l in lines}
     seq_of = {i: k for k, q in enumerate(sequences or []) for i in range(q.first_line, q.last_line + 1)}
-    spans = _merge_short(_spans(lines, lesson, beats, duration, low, seq_of), low, high)
+    spans = _spans(lines, lesson, beats, duration, low, seq_of)
+    spans = _scene_runs(spans) if by_scene else _merge_short(spans, low, high)
     slots = []
     for span in spans:
+        run = by_scene and span.kind not in (ShotKind.SUNG, ShotKind.NUMBER)
         for start, end in _pieces(span, beats, low, high):
+            sung = _sung_in(start, end, span.lines, by_index) if run else span.lines
+            kind = span.kind
+            if run:
+                kind = (ShotKind.MUSIC if not sung else ShotKind.UNCLEAR
+                        if all(lesson[i].tag == LineTag.UNCLEAR for i in sung) else ShotKind.ILLUSTRATE)
             slots.append(Slot(id=f"s{len(slots) + 1:02d}", start=round(start, 3), end=round(end, 3),
-                              lines=span.lines, kind=span.kind, number_text=span.number_text, sequence=span.seq))
+                              lines=sung, kind=kind, number_text=span.number_text, sequence=span.seq))
     return slots
