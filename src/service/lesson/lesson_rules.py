@@ -22,6 +22,7 @@ MAX_SEQUENCES = 8
 MIN_STEPS, MAX_STEPS = 2, 4
 MIN_STEP_SECONDS = 2.5
 MAX_SHOWN_TERMS = 3
+MAX_KEYWORD_WORDS = 3
 
 
 def band_rules(band: GradeBand) -> BandRules:
@@ -76,6 +77,24 @@ def repeats(lines: list[LyricLine]) -> dict[int, int]:
         else:
             first.append(line)
     return found
+
+
+def clear_keywords(draft: LessonDraft, lines: list[LyricLine]) -> list[str]:
+    """Empties each keyword that is not sung in its own line, is longer than MAX_KEYWORD_WORDS or sits on an
+    unclear line, and says which. A wrong keyword is dropped, not asked for again: no word beats a re-ask."""
+    by_index = {l.index: l for l in lines}
+    dropped = []
+    for entry in draft.lines:
+        if not entry.keyword:
+            entry.keyword = None
+            continue
+        line = by_index.get(entry.index)
+        want, sung = _words(entry.keyword), _words(line.text) if line and not line.unclear else []
+        if not (want and len(entry.keyword.split()) <= MAX_KEYWORD_WORDS
+                and any(sung[i:i + len(want)] == want for i in range(len(sung) - len(want) + 1))):
+            dropped.append(f"line {entry.index}: keyword {entry.keyword!r} dropped, it is not sung in the line")
+            entry.keyword = None
+    return dropped
 
 
 def step_seconds(band: GradeBand) -> float:

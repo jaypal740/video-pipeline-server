@@ -4,8 +4,8 @@ from src.schema.lesson.lesson_schema import (GradeBand, KeyTerm, LessonDraft, Le
                                              VideoType)
 from src.schema.song.song_analysis_schema import LyricLine
 from src.service.lesson.lesson_prompt import jamwise_direction, sequence_limit, user_prompt
-from src.service.lesson.lesson_rules import (allowed_types, band_for, band_rules, face_limit, format_rules, problems,
-                                             repeats, sequence_problems)
+from src.service.lesson.lesson_rules import (allowed_types, band_for, band_rules, clear_keywords, face_limit,
+                                             format_rules, problems, repeats, sequence_problems)
 
 LINES = [LyricLine(index=i, text=t, start=i, end=i + 1, confidence=0.9, unclear=(i == 2))
          for i, t in enumerate(["This is a colony.", "In 1858 it grew.", "Mumble words.", "Sing it with me!"])]
@@ -178,3 +178,12 @@ def test_a_fact_may_rest_on_a_figure_only_when_a_line_is_a_number_line():
     assert sequence_problems(draft(lines=numbered, sequences=seq), long, []) == []
     assert sequence_problems(draft(lines=plain, sequences=seq), long, [])[0].startswith(
         "sequence 0-2's fact leans on a figure, but none of its lines is a number line")
+
+
+def test_a_keyword_is_kept_only_when_its_own_clear_line_sings_it():
+    plan = draft()
+    for entry, word in zip(plan.lines, ["Colony", "bacteria", "Mumble", "sing it with me now"]):
+        entry.keyword = word
+    dropped = clear_keywords(plan, LINES)
+    assert [e.keyword for e in plan.lines] == ["Colony", None, None, None]      # not sung, unclear line, too long
+    assert len(dropped) == 3 and dropped[0].startswith("line 1: keyword 'bacteria' dropped")

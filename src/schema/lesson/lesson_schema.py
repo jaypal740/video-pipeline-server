@@ -79,6 +79,7 @@ class LessonLine(BaseModel):
     show: str
     tag: LineTag
     number_text: str | None = None
+    keyword: str | None = None          # the word to remember from the line, as it is sung; code shows it
 
 
 class LessonSequence(BaseModel):

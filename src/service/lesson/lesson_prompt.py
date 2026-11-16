@@ -19,7 +19,13 @@ _PLAN_CHARACTERS = ("The song's plan names its characters, and they are the vide
                     "and no other invented mascots.")
 
 
-def _system(characters: str, singer: str) -> str:
+# A JamWise song's on-screen words are chosen line by line and shown by code at the moment they are sung.
+_KEYWORD = ("- keyword: the one word or short phrase a child should remember from this line, copied exactly as it "
+            "is sung in the line; our code shows it on screen at the moment it is sung. Null when the line teaches "
+            "no term.\n")
+
+
+def _system(characters: str, singer: str, keyword: str = "") -> str:
     return f"""You plan short educational music videos for school classes. The song already exists and \
 drives the video: you never change its words or order, you decide what each line teaches and what the \
 viewer sees while it is sung.
@@ -31,7 +37,7 @@ For every lyric line give:
 - show: one concrete, visible scene or action that makes that idea clear to the age group. Real things \
 doing real things, filmed where they really are, never a picture of them on a screen, card, poster or \
 window. No written words, labels, charts or diagrams in the picture; our code adds any text.
-- tag, exactly one of:
+{keyword}- tag, exactly one of:
   - face_to_camera: {singer} sings the line straight to the viewer. Use it for hooks, choruses and \
 lines that address the viewer, within the limit you are given.
   - number: the line's point is a figure (a year, an amount, a percentage). Put the figure in \
@@ -72,7 +78,7 @@ or misleading, say so in must_not_teach rather than illustrating the error."""
 
 
 SYSTEM = _system(_PEOPLE_ONLY, "a person (the narrator or a presenter)")
-JAMWISE_SYSTEM = _system(_PLAN_CHARACTERS, "the plan's lead")
+JAMWISE_SYSTEM = _system(_PLAN_CHARACTERS, "the plan's lead", _KEYWORD)
 
 
 def jamwise_direction(export: dict) -> str:
