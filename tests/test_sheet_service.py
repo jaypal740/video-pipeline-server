@@ -183,7 +183,7 @@ def test_a_song_with_its_own_singer_needs_no_host_and_its_first_place_sets_the_s
     assert body.prompt.startswith("A stylised 3D animated film character design") and body.params["refs"] == []
     assert green.params["refs"] == [body.id] and "The same person as in image 1" in green.prompt
     assert "presenting the empty space to the right" in green.prompt          # toward the scene laid in beside her
-    assert "pure bright blue" in green.prompt and green.params["aspect"] == "16:9"   # she wears green: a blue screen
+    assert "pure bright green" in green.prompt and green.params["aspect"] == "16:9"  # her screen is always green
     plain = CastMember(id="singer", kind=CastKind.PERSON, look="A girl in a red coat", size="child", scale=Scale.HUMAN, star=True)
     assert "pure bright green" in sheet_prompt(Style(name="3D", features="soft"), plain, "stage", "same")
     assert "same illustration style as image 1" not in sheets["sea"]["plate"].prompt

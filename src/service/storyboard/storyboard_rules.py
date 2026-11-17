@@ -36,6 +36,8 @@ _FACE = re.compile(r"\b((?<!-)eyes?(?!-)|smil\w*|frown\w*|grin\w*|wink\w*|cartoo
 # something is scenery and needs no cast entry.
 _PERSON = re.compile(r"\b(girls?|boys?|men|man|women|woman|kids?|child(?:ren)?|teen(?:ager)?s?|students?|"
                      r"someone|somebody|persons?)\b", re.I)
+# The singer is filmed in front of a green screen that code removes, so nothing she wears may be near green.
+_GREEN = re.compile(r"\b(green|teal|lime|olive|emerald|mint|turquoise|khaki|jade|sage|aqua)\b", re.I)
 _BRIDGES = {Transition.DISSOLVE, Transition.MATCH_CUT}
 _ZOOMS = {CameraMove.PUSH_IN, CameraMove.PULL_BACK}
 
@@ -154,6 +156,9 @@ def star_problems(cast: list[CastMember], starred: bool) -> list[str]:
              "song's characters have star false" for c in cast if c.star and c.kind != CastKind.PERSON]
     if sum(c.star for c in cast) != 1:
         found.append("cast must give the song's singer once, kind person with star true; she sings to camera")
+    found += [f"cast {c.id}: the singer's look names '{_GREEN.search(c.look).group()}'; she is filmed in front of a "
+              "green screen, so give her bright clothes with no green or near-green in them"
+              for c in cast if c.star and _GREEN.search(c.look)]
     return found
 
 

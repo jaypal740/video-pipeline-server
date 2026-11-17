@@ -96,13 +96,12 @@ def sheet_prompt(style: Style, member: CastMember, view: str, reference: str | N
                 f"plain pale-grey studio surface, seen from its most recognisable side, slightly from above. The "
                 f"design features {style.features}. Even soft lighting with a faint contact shadow beneath; the "
                 "rest of the frame is blank grey, right to its edges.")
-    elif view == STAGE:                                          # a plain screen, so code can cut her out:
-        screen = "blue" if "green" in look.lower() else "green"   # never the colour of what she wears
+    elif view == STAGE:                             # a plain green screen, so code can cut her out: she never wears green
         text = (f"{style.name} character design of {look}, seen from the waist up in the middle of the frame, the "
                 f"body turned a little toward the right side of the picture, the arm on the right side of the picture "
                 f"raised with an open hand presenting the empty space to the right, "
                 f"the face to the camera with a bright friendly smile and the mouth closed. The design features "
-                f"{style.features}. The whole background is one perfectly flat, uniform, pure bright {screen}, "
+                f"{style.features}. The whole background is one perfectly flat, uniform, pure bright green, "
                 "evenly lit from edge to edge.")
     elif view in FACE_VIEWS:
         text = (f"{style.name} character design of {look}, a head-and-shoulders portrait facing the viewer directly "

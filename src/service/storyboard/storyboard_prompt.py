@@ -5,7 +5,7 @@ from src.schema.storyboard.storyboard_schema import (BoardHeader, CastMember, Sh
 from src.service.storyboard.storyboard_rules import HOST, LIMITS
 
 # Bumped whenever the prompt changes, so every run is boarded again with the new prompt.
-PROMPT_VERSION = "storyboard.v17"
+PROMPT_VERSION = "storyboard.v19"
 
 # The sentences that differ between a video with our fixed host and a song that comes with its own
 # characters (JamWise), whose lead takes the host's place: (host wording, characters wording).
@@ -15,8 +15,12 @@ _GIVEN = ("The host and the host's place are given; never declare them.",
           "The song's characters are given with the looks its plan describes: declare each one in cast with that "
           "look, cut to the words that make it recognisable. A character that changes form is one cast member per "
           "form. Declare the song's singer too, made for this song alone: id singer, kind person, star true, scale "
-          "human; look: a girl of about ten, her skin, hair and clothes, with clothes in the lead character's "
-          "colours. She is seen only in sung shots.")
+          "human; look: a girl of about ten, her skin, hair and clothes. Her clothes are a full, neat everyday outfit a "
+          "schoolchild would wear: a top with sleeves, such as a t-shirt, hoodie or jacket, with trousers, leggings "
+          "or a skirt, and shoes. They are bright, cheerful colours that children like, such as red, orange, pink, "
+          "purple or yellow, with one strong main colour. No sleeveless tops or dresses and no bare shoulders. "
+          "Nothing she wears is green or close to green, such as teal, lime or olive: she is filmed in front of a "
+          "green screen. She is seen only in sung shots.")
 _OUTFIT = (f"- host_outfit, on every place where the host appears: what the host wears there, fitting that place "
            "and the topic (beach clothes on a beach, a lab coat in a lab, a coat on a ship's deck), at most "
            f"{LIMITS['outfit']} words of clothes and colours. Name one of the wardrobe kits you are given, or write "

@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import math
 import re
 import tempfile
 from pathlib import Path
@@ -33,7 +34,9 @@ _NOT_LETTER = re.compile(r"[^a-z]")
 # A song's singer is cut out of her green screen and stood at the left of the real footage she sings over.
 SINGER_HEIGHT = 0.65        # her clip's height as a share of the film's
 SINGER_CENTRE = 0.17        # where the middle of her clip sits across the film
-GREEN_NEAR, GREEN_BLEND = 0.14, 0.04    # how close to the screen's green is removed, and how soft the edge is
+GREEN_NEAR, GREEN_BLEND = 0.13, 0.04    # how close to the screen's colour is removed, and how soft the edge is
+GREEN_EXACT = 0.025         # ... and how close counts as the screen itself, wherever it is in her clip
+SCREEN_EVERY = 0.5          # the length of each piece she is cut out in, in seconds
 
 
 class AssemblyService:
@@ -143,21 +146,52 @@ class AssemblyService:
 
     def _lay_singer(self, film: Path, singer: Path, offset: float, frames: int) -> None:
         """The singer, cut out of her green screen from `offset` seconds into her clip, stood at the bottom
-        left of a fitted shot. The green is read from her clip's own corner, since each clip's differs a little."""
+        left of a fitted shot. The video model lets her screen drift to another colour as she sings, so she is
+        cut out in pieces of SCREEN_EVERY seconds, each removing only the colour its screen has then, read from
+        her clip's own corner. A near match is removed only where it reaches the frame's edge, so a patch of
+        her skin or clothes close to the screen's colour stays; an exact match is removed anywhere, which
+        clears the screen shut in between her arm and her side. Colours are matched in full, not by tint."""
         fps, h = self._settings.assembly_fps, self._settings.assembly_height
-        corner = film.with_name(f"{film.stem}-corner.png")
-        self._ffmpeg.run(["-i", str(singer), "-frames:v", "1", str(corner)])
-        colour = "%02x%02x%02x" % Image.open(corner).convert("RGB").getpixel((8, 8))
+        seen = self._ffmpeg.probe(singer)
+        w, sh, last = seen["width"], seen["height"], seen["seconds"] - 0.2
+        edge = [(min(w - 3, 2 + i * w // 24), y) for i in range(25) for y in (2, sh - 3)] + \
+               [(x, 2 + j * (sh - 5) // 8) for j in range(9) for x in (2, w - 3)]
+        outside = ",".join(f"floodfill=x={x}:y={y}:s0=0:d0=100" for x, y in edge)
+        corner, pieces = film.with_name(f"{film.stem}-corner.png"), []
+        steps = max(1, math.ceil(frames / fps / SCREEN_EVERY))
+        for i in range(steps):
+            f0, f1 = round(frames * i / steps), round(frames * (i + 1) / steps)
+            at = offset + f0 / fps
+            colours = sorted({self._screen(singer, min(t, last), corner) for t in (at, offset + (f1 - 1) / fps)})
+            keys = "".join(f"[k{j}]colorkey=0x{c}:{GREEN_NEAR}:{GREEN_BLEND},alphaextract[n{j}];"
+                           f"[x{j}]colorkey=0x{c}:{GREEN_EXACT}:0,alphaextract[e{j}];" for j, c in enumerate(colours))
+            near, exact = "n0", "e0"
+            if len(colours) == 2:                               # the screen changed within the piece: remove both
+                keys += "[n0][n1]blend=all_mode=darken[n];[e0][e1]blend=all_mode=darken[e];"
+                near, exact = "n", "e"
+            pieces.append(film.with_name(f"{film.stem}-sung{i:03d}.mp4"))
+            self._ffmpeg.run(["-i", str(film), "-ss", f"{min(at, last):.3f}", "-i", str(singer), "-filter_complex",
+                              f"[0:v]trim=start_frame={f0}:end_frame={f1},setpts=PTS-STARTPTS[f];"
+                              f"[1:v]fps={fps},setpts=PTS-STARTPTS,format=rgba,split={2 * len(colours) + 1}[c]"
+                              f"{''.join(f'[k{j}][x{j}]' for j in range(len(colours)))};{keys}"
+                              f"[{near}]format=gray,lut=y='if(lt(val,128),0,255)',{outside},"
+                              f"lut=y='if(eq(val,100),0,255)'[in];"
+                              # her outline keeps a line of the screen's colour: trim the edge in by two pixels
+                              f"[in][{exact}]blend=all_mode=darken,erosion,erosion,gblur=sigma=0.8[m];[c][m]alphamerge,"
+                              f"scale=-2:{2 * round(h * SINGER_HEIGHT / 2)},"
+                              f"tpad=stop_mode=clone:stop_duration={frames / fps + 1}[s];"
+                              f"[f][s]overlay=x=main_w*{SINGER_CENTRE}-overlay_w/2:y=main_h-overlay_h,format=yuv420p",
+                              "-an", "-frames:v", str(f1 - f0), "-c:v", "libx264", "-crf", "18", str(pieces[-1])])
+        joined = film.with_name(f"{film.stem}-sung.txt")
+        joined.write_text("".join(f"file '{piece}'\n" for piece in pieces))
         out = film.with_name(f"{film.stem}-sung.mp4")
-        self._ffmpeg.run(["-i", str(film), "-ss", f"{offset:.3f}", "-i", str(singer), "-filter_complex",
-                          f"[1:v]fps={fps},chromakey=0x{colour}:{GREEN_NEAR}:{GREEN_BLEND},"
-                          # her outline keeps a line of the screen's colour: trim the edge in by two pixels
-                          "split[c][a];[a]alphaextract,erosion,erosion,gblur=sigma=0.8[m];[c][m]alphamerge,"
-                          f"scale=-2:{2 * round(h * SINGER_HEIGHT / 2)},"
-                          f"tpad=stop_mode=clone:stop_duration={frames / fps + 1}[s];"
-                          f"[0:v][s]overlay=x=main_w*{SINGER_CENTRE}-overlay_w/2:y=main_h-overlay_h,format=yuv420p",
-                          "-an", "-frames:v", str(frames), "-c:v", "libx264", "-crf", "18", str(out)])
+        self._ffmpeg.run(["-f", "concat", "-safe", "0", "-i", str(joined), "-c", "copy", str(out)])
         out.replace(film)
+
+    def _screen(self, singer: Path, at: float, png: Path) -> str:
+        """The colour of the singer's screen `at` seconds into her clip, read from its corner."""
+        self._ffmpeg.run(["-y", "-ss", f"{max(at, 0):.3f}", "-i", str(singer), "-frames:v", "1", str(png)])
+        return "%02x%02x%02x" % Image.open(png).convert("RGB").getpixel((8, 8))
 
     def _assemble(self, work: Path, shots: list[Shot], rows: list[dict], song: Path, start: float, out: Path,
                   captions: Path | None = None) -> None:

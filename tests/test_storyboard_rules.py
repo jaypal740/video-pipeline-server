@@ -225,12 +225,14 @@ def test_a_sung_shot_needs_a_walkable_place_and_a_real_kit():
 def test_a_song_with_its_own_characters_has_a_star_who_sings():
     pip = CastMember(id="pip", kind=CastKind.CHARACTER, look="A plump green caterpillar with big amber eyes",
                      size="thumb sized", scale=Scale.HUMAN)
-    girl = CastMember(id="singer", kind=CastKind.PERSON, look="A girl of about ten in a green jacket", size="child",
+    girl = CastMember(id="singer", kind=CastKind.PERSON, look="A girl of about ten in a red jacket", size="child",
                       scale=Scale.HUMAN, star=True)
     fern = CastMember(id="fern", kind=CastKind.CHARACTER, look="A wide leaf with sleepy eyes", size="hand sized",
                       scale=Scale.HUMAN)
     ship = CastMember(id="ship", kind=CastKind.THING, look="A wooden steamship", size="long", scale=Scale.LANDSCAPE)
     assert star_problems([girl, pip, fern, ship], starred=True) == []
+    in_green = girl.model_copy(update={"look": "A girl of about ten in a teal jacket"})     # her screen is green
+    assert "names 'teal'" in star_problems([in_green, pip, fern, ship], starred=True)[0]
     assert "star true" in star_problems([pip, fern, ship], starred=True)[0]
     assert "its kind is person" in star_problems([pip.model_copy(update={"star": True})], starred=True)[0]   # not the lead
     assert len(star_problems([pip, fern, ship], starred=False)) == 2          # our host's videos have neither
