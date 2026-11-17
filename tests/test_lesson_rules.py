@@ -148,7 +148,7 @@ def test_the_jamwise_plan_gives_the_lesson_its_facts_terms_and_demonstrations():
         "sections": [{"type": "chorus"}, {"type": "verse"}, {"type": "chorus"}, {"type": "chorus"}]}
     text = jamwise_direction(export)
     assert sequence_limit(export) == 9 and sequence_limit({}) == 8        # six scenes and three choruses
-    for part in ("- Character Vex (lead): The Sun itself. Looks like: A lean figure", "This song may use up to 9 sequences.",
+    for part in ("- In the plan, Vex stands for: The Sun itself", "This song may use up to 9 sequences.",
                  "- Scene 1: The Core. Place: Inside the Sun. Happens: Atoms slam. Seen: White heat. Shows the "
                  "idea: Two atoms join Teaches: Fusion makes helium",
                  "- Section verse1: Into the core (Scene 1) Teaches: fusion", "- Chorus picture: The Sun blazing",

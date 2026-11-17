@@ -22,7 +22,7 @@ from src.service.llm.llm_service import LabelledImage, LlmCall, LlmService
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.sheet.sheet_prompt import REAL, Style
 from src.service.sheet.sheet_service import USABLE
-from src.service.stage.stage_common import (PASSED, StopLoss, add_cost, asset_url, keep_best, storyboard_of,
+from src.service.stage.stage_common import (PASSED, StopLoss, add_cost, asset_urls, keep_best, storyboard_of,
                                             write_correction)
 from src.service.storage.storage_service import Storage
 from src.service.storyboard.storyboard_rules import real_shots
@@ -254,8 +254,8 @@ class VideoService:
         if not todo:
             return made
         self._guard_spend(run_id, model, [n for _, _, _, n, *_ in todo])
-        urls = {k.id: asset_url(self._storage, self._video.upload, k) for _, _, k, *_ in todo}
-        urls.update({e.id: asset_url(self._storage, self._video.upload, e) for *_, e in todo if e is not None})
+        urls = asset_urls(self._storage, self._video.upload, [k for _, _, k, *_ in todo]
+                          + [e for *_, e in todo if e is not None], self._settings.image_workers)
         frames = {k.id: self._storage.get(k.path) for _, _, k, *_ in todo}
         with ThreadPoolExecutor(max_workers=self._settings.video_workers) as pool:
             futures = {pool.submit(self._attempts, model, urls[k.id], frames[k.id], *job[:-1],

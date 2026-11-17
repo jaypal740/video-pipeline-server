@@ -241,3 +241,17 @@ def test_a_songs_singer_is_cut_out_of_her_green_screen_and_laid_over_the_real_cl
         r, g, b = colour_at(path, at)
         assert r > 240 and 200 < g < 250 and b < 30
     assert near(colour_at(path, 1.5 - 0.2), (128, 128, 128))       # the look changes on a dissolve: blue into yellow
+
+
+def test_a_singer_who_stands_at_the_side_of_her_clip_is_not_cut_off_by_the_films_edge(stage, tmp_path):
+    service = stage[0]
+    film, green = tmp_path / "shot.mp4", tmp_path / "side.mp4"
+    clip(film, ("yellow", 1.0))
+    ff("-f", "lavfi", "-i", f"color=0x00b140:size=160x90:rate={FPS}:d=1", "-vf",
+       "drawbox=x=2:y=20:w=28:h=70:color=red:t=fill", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(green))
+    service._lay_singer(film, green, 0.0, FPS)
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", "0.5", "-i", str(film), "-frames:v", "1", "-f", "rawvideo",
+                          "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
+    frame = np.frombuffer(raw, dtype=np.uint8).reshape(90, 160, 3).astype(int)
+    red = (frame[..., 0] > 180) & (frame[..., 1] < 90)
+    assert red.sum() > 550 and not red[:, 0].any()         # all of her 18 x 45 figure, clear of the edge

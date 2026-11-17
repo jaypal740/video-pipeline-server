@@ -5,18 +5,20 @@ from src.service.lesson.lesson_rules import (MAX_SEQUENCE_SECONDS, MAX_SEQUENCES
                                              format_rules, place_limit, repeats, step_seconds)
 
 # Bumped whenever the prompt changes, so every run is planned again with the new prompt.
-PROMPT_VERSION = "lesson.v8"
+PROMPT_VERSION = "lesson.v9"
 
 _PEOPLE_ONLY = ("Only people, such as a narrator or presenter, are characters. Cells, germs, molecules, animals, "
                 "objects and ideas look and behave as they really do: never cartoon faces, eyes or human expressions "
                 "on them, and no invented mascots or metaphors standing in for the real thing.")
-# A JamWise song comes with its own characters, who take the place of the host.
-_PLAN_CHARACTERS = ("The song's plan names its characters, and they are the video's characters: the lead acts "
-                    "in the scenes as the plan says, and the others appear where the plan puts "
-                    "them. A character that is an animal or a thing may have a face and feelings, but its body, its "
-                    "life stages and what it does stay true to the real thing. Everything else, cells, germs, "
-                    "molecules, other animals and objects, looks and behaves as it really does: no faces on them "
-                    "and no other invented mascots.")
+# A JamWise song's plan tells its story through characters with faces. The video shows the real things instead.
+_PLAN_CHARACTERS = ("The song's plan tells its story through named characters with faces, such as a planet drawn as "
+                    "a girl or a leaf with eyes. They are not in the video. Each one stands for a real thing, and "
+                    "the video shows that real thing in its place, as it really looks, doing what the plan's scene "
+                    "says happens to it: never a face, eyes, a smile, limbs, clothes or feelings on an animal, a "
+                    "thing or an idea, and no mascots. Never write a character's name: write the plain word for "
+                    "the real thing, such as the caterpillar, the water drop or the Earth. Where a line is sung in "
+                    "a character's voice, show the real thing doing what the line says. Only the song's own singer "
+                    "is a character.")
 
 
 # A JamWise song's on-screen words are chosen line by line and shown by code at the moment they are sung.
@@ -110,11 +112,11 @@ def jamwise_direction(export: dict) -> str:
              "the plan and the lyrics, show what is true, and put each wrong idea in must_not_teach. Where the "
              "plan writes a word or figure into the picture, leave it out: our code labels terms and draws "
              "numbers. Leave out anything a character says that the song does not sing. Show an animal or thing "
-             "once in a picture, never two of it side by side. The plan's characters are listed below; where a "
-             "rule says host, narrator or presenter, that is the song's own singer."]
+             "once in a picture, never two of it side by side. What each of the plan's characters stands for is "
+             "listed below; where a rule says host, narrator or presenter, that is the song's own singer."]
     parts += [f"- Learning goal: {g}" for g in package.get("learningObjectives", [])]
-    parts += [f"- Character {c.get('name')} ({c.get('role')}): {c.get('concept')}. Looks like: "
-              f"{c.get('visualDescription')}" for c in brief.get("cast", []) if c.get("name")]
+    parts += [f"- In the plan, {c.get('name')} stands for: {c.get('concept')}" for c in brief.get("cast", [])
+              if c.get("name")]
     parts += [f"- Scene {s.get('id')}: {s.get('title')}. Place: {s.get('place')}. Happens: {s.get('situation')} "
               f"Seen: {s.get('visualDescription')} Shows the idea: "
               f"{(s.get('teachingMoment') or {}).get('visualDemonstration')} Teaches: {s.get('teaches')}"

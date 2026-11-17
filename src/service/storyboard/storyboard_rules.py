@@ -147,13 +147,14 @@ def header_problems(draft: StoryboardDraft, band: BandRules, slots: list[Slot],
 
 
 def star_problems(cast: list[CastMember], starred: bool) -> list[str]:
-    """A song that comes with its own characters has one singer, a person made for it, marked as the star; no
-    other board has a star or a character."""
+    """A song that comes with its own singer has her once, a person made for it, marked as the star; no other
+    board has a star. Nothing but a person has a face, so no board has a character."""
+    found = [f"cast {c.id}: nothing but the singer has a face; make it kind thing and give the look the real "
+             "thing has, with no face, eyes, limbs or clothes" for c in cast if c.kind == CastKind.CHARACTER]
     if not starred:
-        return [f"cast {c.id}: only a song with its own characters has a star or kind character"
-                for c in cast if c.star or c.kind == CastKind.CHARACTER]
-    found = [f"cast {c.id} is the star, so its kind is person: the singer is a girl made for this song, and the "
-             "song's characters have star false" for c in cast if c.star and c.kind != CastKind.PERSON]
+        return found + [f"cast {c.id}: only a song with its own singer has a star" for c in cast if c.star]
+    found += [f"cast {c.id} is the star, so its kind is person: the singer is a girl made for this song, and "
+              "everything else has star false" for c in cast if c.star and c.kind != CastKind.PERSON]
     if sum(c.star for c in cast) != 1:
         found.append("cast must give the song's singer once, kind person with star true; she sings to camera")
     found += [f"cast {c.id}: the singer's look names '{_GREEN.search(c.look).group()}'; she is filmed in front of a "

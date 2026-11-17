@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # lip-sync stage makes them from the keyframe and the song. Chosen on the 2026-11-02 bake-offs.
     video_model: str = Field(default="minimax-h3-max-turbo", validation_alias="PIPELINE_VIDEO_MODEL")
     video_fallback_model: str | None = Field(default="kling-o3-standard", validation_alias="PIPELINE_VIDEO_FALLBACK_MODEL")
-    video_workers: int = Field(default=4, validation_alias="PIPELINE_VIDEO_WORKERS")
+    video_workers: int = Field(default=8, validation_alias="PIPELINE_VIDEO_WORKERS")
     video_length_factor: float = Field(default=1.0, validation_alias="PIPELINE_VIDEO_LENGTH_FACTOR")
     video_sung_mode: str = Field(default="skip", validation_alias="PIPELINE_VIDEO_SUNG_MODE")
     # Lip-sync: the host's sung shots, drawn from the keyframe and the song from the shot's start.

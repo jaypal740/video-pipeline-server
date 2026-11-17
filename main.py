@@ -158,11 +158,9 @@ def run_storyboard(
     run_id: str,
     model: str | None = typer.Option(None, "--model", help="Override the storyboard model."),
     force: bool = typer.Option(False, "--force", help="Board again even if nothing changed."),
-    star: str | None = typer.Option(None, "--star", help="Another look for the lead of a song that has its own "
-                                                          "characters, in place of its plan's."),
 ) -> None:
     """Stage 3: the shot list, cut on the beat, that the image and video models draw."""
-    board = container.storyboard_service().run(run_id, model=model, force=force, star_look=star)
+    board = container.storyboard_service().run(run_id, model=model, force=force)
     typer.echo(f"{board.video_type}, grades {board.grade_band}: {board.shape}")
     typer.echo(f"places: {', '.join(p.id for p in board.places)} | cast: {', '.join(c.id for c in board.cast)}")
     for shot in board.shots:

@@ -21,7 +21,7 @@ from src.service.lesson.lesson_rules import band_rules, format_rules
 from src.service.llm.llm_service import LlmCall, LlmError, LlmService
 from src.service.stage.stage_common import add_llm_cost, fail_stage
 from src.service.storyboard.storyboard_prompt import (PROMPT_VERSION, REVIEW_SYSTEM, STAR_SYSTEM, SYSTEM,
-                                                      WATCH_SYSTEM, characters_text, header_prompt, review_prompt,
+                                                      WATCH_SYSTEM, header_prompt, review_prompt,
                                                       rewrite_note, sequence_prompt, user_prompt, watch_prompt)
 from src.service.storyboard.storyboard_rules import (assemble, fix, header_problems, host_for,
                                                      sequence_place_problems, shot_problems, star_problems, wanted,
@@ -54,15 +54,13 @@ class StoryboardService:
         self._llm = llm
         self._settings = settings
 
-    def run(self, run_id: str, model: str | None = None, force: bool = False,
-            star_look: str | None = None) -> Storyboard:
-        """star_look: another look for the lead of a song that has its own characters, in place of its plan's."""
+    def run(self, run_id: str, model: str | None = None, force: bool = False) -> Storyboard:
         run = self._run(run_id)
         plan = self._plan(run)
         analysis = self._analysis(run)
         band, fmt = band_rules(plan.grade_band), format_rules(plan.video_type)
         export = export_beside(self._songs.songs.get(run.song_id).audio_path)
-        # A JamWise song comes with its own characters: its lead is the star, and our host is not used.
+        # A JamWise song has its own singer, made for it: she is the star, and our host is not used.
         host, wardrobe = (None if export else host_for(plan.grade_band)), wardrobe_for(plan.grade_band)
         system = STAR_SYSTEM if export else SYSTEM
         if [l.index for l in plan.lines] != [l.index for l in analysis.lines]:
@@ -73,8 +71,7 @@ class StoryboardService:
                            plan.sequences, by_scene=host is None)
         model = model or run.model_pins.get(StageName.STORYBOARD) or self._settings.storyboard_model
         sung = _sung(analysis, slots)
-        prompt = user_prompt(plan, analysis.lines, slots, band, fmt, host, wardrobe, sung,
-                             characters_text(export, star_look) if export else None)
+        prompt = user_prompt(plan, analysis.lines, slots, band, fmt, host, wardrobe, sung, export is not None)
         key = hashlib.sha256(f"{PROMPT_VERSION}|{model}|{system}|{prompt}".encode()).hexdigest()
 
         state = self._runs.stage(run.id, StageName.STORYBOARD)

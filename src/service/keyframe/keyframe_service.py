@@ -25,7 +25,7 @@ from src.service.keyframe.keyframe_prompt import (LINK_LABEL, START_LABEL, end_b
 from src.service.sheet.sheet_prompt import PLATE, REAL, Style
 from src.service.image.image_prices import image_model
 from src.service.sheet.sheet_service import USABLE, SheetService
-from src.service.stage.stage_common import (PASSED, StopLoss, add_cost, asset_url, keep_best, storyboard_of,
+from src.service.stage.stage_common import (PASSED, StopLoss, add_cost, asset_urls, keep_best, storyboard_of,
                                             write_correction)
 from src.service.storage.storage_service import Storage
 from src.service.storyboard.storyboard_rules import HOST, real_shots
@@ -368,7 +368,8 @@ class KeyframeService:
         if not todo:
             return made
         self._guard_spend(run_id, model, len(todo))
-        ref_urls = {r.id: asset_url(self._storage, self._images.upload, r) for plan, *_ in todo for r in plan.refs}
+        ref_urls = asset_urls(self._storage, self._images.upload, [r for plan, *_ in todo for r in plan.refs],
+                              self._settings.image_workers)
         ref_bytes = {r.id: self._storage.get(r.path) for plan, *_ in todo for r in plan.refs}
         with ThreadPoolExecutor(max_workers=self._settings.image_workers) as pool:
             futures = {pool.submit(self._attempts, model, ref_urls, ref_bytes, *job): job[0] for job in todo}

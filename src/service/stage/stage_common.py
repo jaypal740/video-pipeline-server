@@ -1,5 +1,6 @@
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from src.repository.asset.asset_repository import AssetRepository
 from src.repository.run.run_repository import RunRepository
@@ -32,6 +33,14 @@ def storyboard_of(runs: RunRepository, run_id: str) -> Storyboard:
 def asset_url(storage: Storage, upload, asset: Asset) -> str:
     """A link the model provider can fetch: the store's own link, else the picture uploaded to the provider."""
     return storage.url(asset.path, URL_SECONDS) or upload(storage.get(asset.path), "image/png")
+
+
+def asset_urls(storage: Storage, upload, assets: list[Asset], workers: int) -> dict[str, str]:
+    """A link for each picture, by asset id, uploaded several at once: one at a time, a film's pictures took
+    longer to upload than its clips took to make."""
+    unique = list({a.id: a for a in assets}.values())
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        return dict(zip((a.id for a in unique), pool.map(lambda a: asset_url(storage, upload, a), unique)))
 
 
 def add_cost(assets: AssetRepository, run_id: str | None, stage: StageName, provider: str, model: str, cost: float,

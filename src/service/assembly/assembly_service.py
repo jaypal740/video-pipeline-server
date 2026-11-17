@@ -5,7 +5,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageFilter
 
 from src.core.configs import Settings
 from src.repository.asset.asset_repository import AssetRepository
@@ -33,7 +33,8 @@ CAPTIONS_VERSION = "captions.v3"    # bumped when the captions change, so films 
 _NOT_LETTER = re.compile(r"[^a-z]")
 # A song's singer is cut out of her green screen and stood at the left of the real footage she sings over.
 SINGER_HEIGHT = 0.65        # her clip's height as a share of the film's
-SINGER_CENTRE = 0.17        # where the middle of her clip sits across the film
+SINGER_CENTRE = 0.17        # where she stands across the film ...
+SINGER_MARGIN = 0.01        # ... moved right as far as it takes to keep this much between her and its left edge
 GREEN_NEAR, GREEN_BLEND = 0.13, 0.04    # how close to the screen's colour is removed, and how soft the edge is
 GREEN_EXACT = 0.025         # ... and how close counts as the screen itself, wherever it is in her clip
 SCREEN_EVERY = 0.5          # the length of each piece she is cut out in, in seconds
@@ -158,6 +159,7 @@ class AssemblyService:
                [(x, 2 + j * (sh - 5) // 8) for j in range(9) for x in (2, w - 3)]
         outside = ",".join(f"floodfill=x={x}:y={y}:s0=0:d0=100" for x, y in edge)
         corner, pieces = film.with_name(f"{film.stem}-corner.png"), []
+        left, middle = self._stands(singer, corner)
         steps = max(1, math.ceil(frames / fps / SCREEN_EVERY))
         for i in range(steps):
             f0, f1 = round(frames * i / steps), round(frames * (i + 1) / steps)
@@ -180,13 +182,29 @@ class AssemblyService:
                               f"[in][{exact}]blend=all_mode=darken,erosion,erosion,gblur=sigma=0.8[m];[c][m]alphamerge,"
                               f"scale=-2:{2 * round(h * SINGER_HEIGHT / 2)},"
                               f"tpad=stop_mode=clone:stop_duration={frames / fps + 1}[s];"
-                              f"[f][s]overlay=x=main_w*{SINGER_CENTRE}-overlay_w/2:y=main_h-overlay_h,format=yuv420p",
+                              f"[f][s]overlay=x='max(main_w*{SINGER_CENTRE}-overlay_w*{middle:.3f},main_w*{SINGER_MARGIN}"
+                              f"-overlay_w*{left:.3f})':y=main_h-overlay_h,format=yuv420p",
                               "-an", "-frames:v", str(f1 - f0), "-c:v", "libx264", "-crf", "18", str(pieces[-1])])
         joined = film.with_name(f"{film.stem}-sung.txt")
         joined.write_text("".join(f"file '{piece}'\n" for piece in pieces))
         out = film.with_name(f"{film.stem}-sung.mp4")
         self._ffmpeg.run(["-f", "concat", "-safe", "0", "-i", str(joined), "-c", "copy", str(out)])
         out.replace(film)
+
+    def _stands(self, singer: Path, png: Path) -> tuple[float, float]:
+        """Where she stands in her own clip, as shares of its width: the furthest left she reaches, and her
+        middle. It is read from the whole clip, so she stays in one place through every shot of a chorus. She
+        is not always in the middle of her clip, and placed as if she were, she was cut off by the film's edge."""
+        self._ffmpeg.run(["-y", "-i", str(singer), "-vf", "fps=5,scale=104:60,tile=1x100", "-frames:v", "1", str(png)])
+        sheet, lefts, middles = Image.open(png).convert("RGB"), [], []
+        for top in range(0, sheet.height, 60):
+            frame = sheet.crop((0, top, 104, top + 60))
+            apart = ImageChops.difference(frame, Image.new("RGB", frame.size, frame.getpixel((1, 1)))).convert("L")
+            box = apart.point(lambda v: 255 if v > 40 else 0).filter(ImageFilter.MinFilter(3)).getbbox()
+            if box is not None:
+                lefts.append(box[0] / 104)
+                middles.append((box[0] + box[2]) / 208)
+        return (min(lefts), sorted(middles)[len(middles) // 2]) if lefts else (0.0, 0.5)
 
     def _screen(self, singer: Path, at: float, png: Path) -> str:
         """The colour of the singer's screen `at` seconds into her clip, read from its corner."""

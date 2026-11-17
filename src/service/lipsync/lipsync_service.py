@@ -23,7 +23,7 @@ from src.service.llm.llm_service import LabelledImage, LlmCall
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.sheet.sheet_prompt import NO_OVERLAY_TEXT, STAGE
 from src.service.sheet.sheet_service import USABLE
-from src.service.stage.stage_common import add_cost, asset_url, keep_best, storyboard_of
+from src.service.stage.stage_common import add_cost, asset_urls, keep_best, storyboard_of
 from src.service.storage.storage_service import Storage
 from src.service.storyboard.storyboard_rules import real_shots
 from src.service.video.clip_checks import DURATION_SLACK, ClipChecks, ClipCheckService
@@ -225,7 +225,7 @@ class LipsyncService:
             return made
         self._guard_spend(run_id, model, [n for _, _, _, n, *_ in todo])
         song = self._songs.songs.get(self._runs.runs.get(run_id).song_id)
-        images = {k.id: asset_url(self._storage, self._lipsync.upload, k) for _, k, *_ in todo}
+        images = asset_urls(self._storage, self._lipsync.upload, [k for _, k, *_ in todo], self._settings.image_workers)
         frames = {k.id: self._storage.get(k.path) for _, k, *_ in todo}
         audio = {s.id: self._lipsync.upload(self._cut(song.audio_path, s.start, n), "audio/mp4")
                  for s, _, _, n, *_ in todo}

@@ -5,16 +5,15 @@ from src.schema.storyboard.storyboard_schema import (BoardHeader, CastMember, Sh
 from src.service.storyboard.storyboard_rules import HOST, LIMITS
 
 # Bumped whenever the prompt changes, so every run is boarded again with the new prompt.
-PROMPT_VERSION = "storyboard.v19"
+PROMPT_VERSION = "storyboard.v20"
 
 # The sentences that differ between a video with our fixed host and a song that comes with its own
-# characters (JamWise), whose lead takes the host's place: (host wording, characters wording).
-_KINDS = ("kind person or thing",
-          "kind person, character (an animal or thing the song's plan gives a face) or thing")
+# singer (JamWise), who takes the host's place: (host wording, singer wording).
+_KINDS = ("kind person or thing", "kind person or thing")
 _GIVEN = ("The host and the host's place are given; never declare them.",
-          "The song's characters are given with the looks its plan describes: declare each one in cast with that "
-          "look, cut to the words that make it recognisable. A character that changes form is one cast member per "
-          "form. Declare the song's singer too, made for this song alone: id singer, kind person, star true, scale "
+          "Declare each real thing the lesson shows in cast as kind thing, with the look it really has. A thing "
+          "that changes form is one cast member per form. Declare the song's singer too, the only person and the "
+          "only one with a face, made for this song alone: id singer, kind person, star true, scale "
           "human; look: a girl of about ten, her skin, hair and clothes. Her clothes are a full, neat everyday outfit a "
           "schoolchild would wear: a top with sleeves, such as a t-shirt, hoodie or jacket, with trousers, leggings "
           "or a skirt, and shoes. They are bright, cheerful colours that children like, such as red, orange, pink, "
@@ -27,10 +26,10 @@ _OUTFIT = (f"- host_outfit, on every place where the host appears: what the host
            "your own. Leave it out for places the host never appears in.\n", "")
 _CHARACTERS = ("Only people are characters. Cells, germs, molecules, animals, objects and ideas look and behave as "
                "they really do: never faces, eyes or expressions on them, no mascots, no invented metaphors.",
-               "The song's characters are the only characters: they may have faces and feelings and act as the "
-               "lesson says, but their bodies, life stages and what they do stay true to the real thing. Cells, "
-               "germs, molecules, other animals, objects and ideas look and behave as they really do: never faces, "
-               "eyes or expressions on them, no other mascots.")
+               "Only the song's singer is a character. Cells, germs, molecules, animals, objects and ideas look and "
+               "behave as they really do: never faces, eyes, limbs, clothes or expressions on them, no mascots, no "
+               "invented metaphors. The lyrics may call a thing by a name the song gave it; never write that name: "
+               "write the plain word for the real thing.")
 _SINGER = ("the host", "the singer")
 _FOLLOW = ("Follow the lesson's idea for each line; change it only when continuity needs it, and keep what it "
            "teaches.",
@@ -38,10 +37,10 @@ _FOLLOW = ("Follow the lesson's idea for each line; change it only when continui
            "order, moving on to the next step when the words reach it. A step that has several slots is held "
            "across them, each shot showing it further along or closer, so the viewer has time to understand it. "
            "Each shot shows the step its sung words are about: what a line names is on screen while it is sung, "
-           "and a character it names is in the shot.")
-# A song with its own characters has its sequences written at the same time, so the header says how each opens.
+           "and the thing it names is in the shot.")
+# A song with its own singer has its sequences written at the same time, so the header says how each opens.
 _OPENS = ("", " opens: one or two plain sentences on how things stand when the sequence opens: where each "
-          "character is and in which form, what has changed for good by then, where a thing that stays put is "
+          "thing is and in which form, what has changed for good by then, where a thing that stays put is "
           "fixed, and whether it opens earlier or later than the sequence before it ends. The sequences are "
           "written at the same time, each from its own opens and the next one's, so together they tell one "
           "unbroken story: what one sequence leaves is what the next opens with.")
@@ -166,15 +165,6 @@ SYSTEM = _system(*(part[0] for part in (_KINDS, _GIVEN, _OUTFIT, _CHARACTERS, _S
 STAR_SYSTEM = _system(*(part[1] for part in (_KINDS, _GIVEN, _OUTFIT, _CHARACTERS, _SINGER, _FOLLOW, _SUNG, _OPENS)))
 
 
-def characters_text(export: dict, star_look: str | None = None) -> str:
-    """A JamWise song's characters as its plan describes them, the lead first. star_look: another look for
-    the lead, when the plan's own does not draw well."""
-    cast = sorted((export.get("creativeBrief") or {}).get("cast", []), key=lambda c: c.get("role") != "lead")
-    return "\n".join(f"- {c.get('name')} ({c.get('role')}): {c.get('concept')}. Looks like: "
-                     f"{star_look if star_look and c.get('role') == 'lead' else c.get('visualDescription')}"
-                     for c in cast if c.get("name"))
-
-
 def _slot_line(slot: Slot, lines: dict[int, LyricLine], plan: dict, sung: str | None = None,
                by_scene: bool = False) -> str:
     """by_scene: a picture slot shows its sequence's steps, so it is given the words sung but no line's idea."""
@@ -200,13 +190,13 @@ def _sequence_line(k: int, q: LessonSequence) -> str:
 
 def user_prompt(plan: LessonPlan, lines: list[LyricLine], slots: list[Slot], band: BandRules, fmt: FormatRules,
                 host: CastMember | None, wardrobe: dict[str, str], sung: dict[str, str] | None = None,
-                characters: str | None = None) -> str:
+                starred: bool = False) -> str:
     """The whole film, given to every call: the lesson, the rules, every sequence and every slot. sung: the
-    words sung during each slot, so a line split across shots shows each shot its own words. characters: the
-    song's own characters, given in place of the host."""
-    who = (f"The song's characters, from its plan (where a rule above says host, that is the song's singer):\n{characters}\n"
-           "The lead acts in the scenes the lesson puts it in; the song's singer sings the sung shots."
-           if characters else
+    words sung during each slot, so a line split across shots shows each shot its own words. starred: the
+    song has its own singer, in place of the host."""
+    who = ("The song has its own singer (where a rule above says host, that is the song's singer). She sings the "
+           "sung shots and is in no other shot; every other shot shows real things only."
+           if starred else
            f"Host ({HOST}): {host.look} Size: {host.size}. Wardrobe kits: "
            + "; ".join(f"{kit}: {outfit}" for kit, outfit in wardrobe.items())
            + f". For a {fmt.type} video the usual kit is {fmt.host_outfit}; dress the host for each place."
@@ -214,7 +204,7 @@ def user_prompt(plan: LessonPlan, lines: list[LyricLine], slots: list[Slot], ban
     by_index = {l.index: l for l in lines}
     lesson = {l.index: l for l in plan.lines}
     grouped = "\n".join(_sequence_line(k, q)
-                        + "".join(f"\n  {_slot_line(s, by_index, lesson, (sung or {}).get(s.id), characters is not None)}"
+                        + "".join(f"\n  {_slot_line(s, by_index, lesson, (sung or {}).get(s.id), starred)}"
                                   for s in slots if s.sequence == k)
                         for k, q in enumerate(plan.sequences))
     return (f"Topic: {plan.topic} ({plan.subject}). {plan.summary}\n"

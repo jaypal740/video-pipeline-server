@@ -6,7 +6,7 @@ from src.schema.storyboard.storyboard_schema import (Angle, BoardHeader, Camera,
                                                      Scale, ScreenDirection, SequencePlaces, ShotDraft, ShotKind,
                                                      ShotSize, Slot, Speed, StoryboardDraft, Transition)
 from src.service.lesson.lesson_rules import band_rules, format_rules
-from src.service.storyboard.storyboard_prompt import STAR_SYSTEM, characters_text, sequence_prompt
+from src.service.storyboard.storyboard_prompt import STAR_SYSTEM, sequence_prompt
 from src.service.storyboard.storyboard_rules import (assemble, fix, header_problems, host_for, shot_problems,
                                                      star_problems)
 
@@ -222,7 +222,7 @@ def test_a_sung_shot_needs_a_walkable_place_and_a_real_kit():
     assert any("host_outfit has digits" in p for p in header_problems(draft, BAND, s))
 
 
-def test_a_song_with_its_own_characters_has_a_star_who_sings():
+def test_a_song_with_its_own_singer_has_a_star_who_sings_and_no_other_face():
     pip = CastMember(id="pip", kind=CastKind.CHARACTER, look="A plump green caterpillar with big amber eyes",
                      size="thumb sized", scale=Scale.HUMAN)
     girl = CastMember(id="singer", kind=CastKind.PERSON, look="A girl of about ten in a red jacket", size="child",
@@ -230,13 +230,16 @@ def test_a_song_with_its_own_characters_has_a_star_who_sings():
     fern = CastMember(id="fern", kind=CastKind.CHARACTER, look="A wide leaf with sleepy eyes", size="hand sized",
                       scale=Scale.HUMAN)
     ship = CastMember(id="ship", kind=CastKind.THING, look="A wooden steamship", size="long", scale=Scale.LANDSCAPE)
-    assert star_problems([girl, pip, fern, ship], starred=True) == []
+    real = [m.model_copy(update={"kind": CastKind.THING, "look": look})         # shown as they really look
+            for m, look in ((pip, "A plump striped caterpillar"), (fern, "A wide milkweed leaf"))]
+    assert star_problems([girl, *real, ship], starred=True) == []
+    assert "nothing but the singer has a face" in star_problems([girl, pip, fern, ship], starred=True)[0]
     in_green = girl.model_copy(update={"look": "A girl of about ten in a teal jacket"})     # her screen is green
-    assert "names 'teal'" in star_problems([in_green, pip, fern, ship], starred=True)[0]
-    assert "star true" in star_problems([pip, fern, ship], starred=True)[0]
-    assert "its kind is person" in star_problems([pip.model_copy(update={"star": True})], starred=True)[0]   # not the lead
-    assert len(star_problems([pip, fern, ship], starred=False)) == 2          # our host's videos have neither
-    assert header_problems(board(shot("s01"), cast=[girl, pip, fern, ship]), BAND, slots(ShotKind.SUNG)) == []
+    assert "names 'teal'" in star_problems([in_green, *real, ship], starred=True)[0]
+    assert "star true" in star_problems([*real, ship], starred=True)[0]
+    assert "its kind is person" in star_problems([real[0].model_copy(update={"star": True})], starred=True)[0]
+    assert len(star_problems([pip, fern, ship], starred=False)) == 2          # no board has a thing with a face
+    assert header_problems(board(shot("s01"), cast=[girl, *real, ship]), BAND, slots(ShotKind.SUNG)) == []
     named = board(shot("s01", subjects=["pip"], start_state="Pip sits under Fern, who looks down."), cast=[pip, fern, ship])
     found = shot_problems(named, slots(ShotKind.SUNG), BAND, FMT, None)          # a named character is in subjects
     assert any("names Fern, who is not in its subjects" in p for p in found["s01"])
@@ -260,14 +263,9 @@ def test_a_song_with_its_own_characters_has_a_star_who_sings():
     assert music.subjects == ["ship"]
 
 
-def test_the_plans_characters_are_given_lead_first_with_another_look_when_asked():
-    export = {"creativeBrief": {"cast": [
-        {"name": "Fern", "role": "supporting", "concept": "A leaf", "visualDescription": "Wide and green"},
-        {"name": "Pip", "role": "lead", "concept": "A caterpillar", "visualDescription": "Plump and green"}]}}
-    assert characters_text(export) == ("- Pip (lead): A caterpillar. Looks like: Plump and green\n"
-                                       "- Fern (supporting): A leaf. Looks like: Wide and green")
-    assert "- Pip (lead): A caterpillar. Looks like: Striped yellow\n" in characters_text(export, "Striped yellow")
+def test_a_song_with_its_own_singer_is_boarded_with_no_host_and_no_other_face():
     assert "host" not in STAR_SYSTEM and "star true" in STAR_SYSTEM
+    assert "Only the song's singer is a character" in STAR_SYSTEM and "kind person or thing" in STAR_SYSTEM
 
 
 def test_a_sequence_written_alone_is_told_how_it_opens_and_how_the_next_one_does():
