@@ -164,6 +164,31 @@ def test_sheets_need_an_approved_host_first(stage, container):
         service.run(run.id)
 
 
+def test_a_song_with_its_own_singer_needs_no_host_and_its_first_place_sets_the_style(stage, container):
+    service, fal, _ = stage
+    run = board_run(container)
+    pip = {"id": "pip", "kind": "character", "look": "A green caterpillar", "size": "5 cm", "scale": "object"}
+    girl = {"id": "singer", "kind": "person", "look": "A girl of about ten in a green jacket", "size": "child",
+            "scale": "human", "star": True}
+    cast = [m for m in BOARD["cast"] if m["id"] == "ship"] + [pip, girl]
+    shot = {**BOARD["shots"][0], "performer": "singer", "subjects": ["singer"]}
+    state = container.run_repository().stage(run.id, StageName.STORYBOARD)
+    state.output = {**BOARD, "cast": cast, "shots": [shot]}
+    container.run_repository().stage_states.update(state)
+    sheets = service.run(run.id)                                 # no host was ever drawn or approved
+    assert set(sheets) == {"ship", "pip", "singer", "sea"} and set(sheets["singer"]) == {"front", "stage"}
+    assert sorted(c[2] for c in fal.calls) == [0, 0, 1, 1, 1]    # the sea and the singer from words alone
+    assert sheets["ship"]["front"].params["refs"] == sheets["pip"]["front"].params["refs"] == [sheets["sea"]["plate"].id]
+    body, green = sheets["singer"]["front"], sheets["singer"]["stage"]        # she is 3D; on green she is the same girl
+    assert body.prompt.startswith("A stylised 3D animated film character design") and body.params["refs"] == []
+    assert green.params["refs"] == [body.id] and "The same person as in image 1" in green.prompt
+    assert "presenting the empty space to the right" in green.prompt          # toward the scene laid in beside her
+    assert "pure bright blue" in green.prompt and green.params["aspect"] == "16:9"   # she wears green: a blue screen
+    plain = CastMember(id="singer", kind=CastKind.PERSON, look="A girl in a red coat", size="child", scale=Scale.HUMAN, star=True)
+    assert "pure bright green" in sheet_prompt(Style(name="3D", features="soft"), plain, "stage", "same")
+    assert "same illustration style as image 1" not in sheets["sea"]["plate"].prompt
+
+
 def test_sheets_are_drawn_in_the_host_style_checked_and_costed(stage, container):
     service, fal, vision = stage
     approve_a_host(service, fal)
@@ -192,14 +217,20 @@ def test_sheets_are_drawn_in_the_host_style_checked_and_costed(stage, container)
 def test_a_sheet_that_fails_every_draw_below_the_floor_fails_the_stage(stage, container):
     service, fal, vision = stage
     approve_a_host(service, fal)
-    vision.fail_when = ("Victorian", 2)                        # the operator's front view fails both draws at 4/10
+    vision.fail_when = ("Victorian", 3)                        # the operator's front view fails every draw at 4/10
     run = board_run(container)
+    container.settings().image_workers = 1                     # one at a time, so the front view takes both fails
     sheets = service.run(run.id)
+    container.settings().image_workers = 4
     operator = sheets["operator"]["front"]
     assert operator.review == ReviewState.FAILED and "waistcoat is blue" in operator.review_notes
     tries = [a for a in container.asset_repository().assets.list(run_id=run.id, target_id="operator")
              if a.params["view"] == "front"]
-    assert sorted(a.params["try"] for a in tries) == [1, 2] and all(a.review == ReviewState.FAILED for a in tries)
+    assert sorted(a.params["try"] for a in tries) == [1, 2, 3] and all(a.review == ReviewState.FAILED for a in tries)
+    second = next(a for a in tries if a.params["try"] == 2)       # the retry is drawn with the judge's findings turned
+    assert len(vision.corrections) == 2 and second.prompt.endswith("Show the operator in a red waistcoat.")   # into a fix
+    assert [a.model for a in sorted(tries, key=lambda a: a.params["try"])][-1] == "gpt-image-2"   # the last on the other model
+    assert "waistcoat is blue" in vision.corrections[0]
     state = container.run_repository().stage(run.id, StageName.VISUAL_IDENTITY)
     assert state.status == StageStatus.FAILED and "operator/front: failed every draw; best 4/10" in state.error
 
@@ -207,9 +238,11 @@ def test_a_sheet_that_fails_every_draw_below_the_floor_fails_the_stage(stage, co
 def test_a_sheet_that_fails_every_draw_uses_its_best_try_above_the_floor(stage, container):
     service, fal, vision = stage
     approve_a_host(service, fal)
-    vision.fail_when, vision.fail_score = ("Victorian", 2), 5   # fails the bar of 6, meets the floor of 5
+    vision.fail_when, vision.fail_score = ("Victorian", 3), 5   # fails the bar of 6, meets the floor of 5
     run = board_run(container)
+    container.settings().image_workers = 1                     # one at a time, so the front view takes both fails
     sheets = service.run(run.id)
+    container.settings().image_workers = 4
     operator = sheets["operator"]["front"]
     assert operator.review == ReviewState.USED_BEST and operator.params["score"] == 5
     state = container.run_repository().stage(run.id, StageName.VISUAL_IDENTITY)
@@ -236,6 +269,9 @@ def test_a_thing_is_drawn_and_judged_as_many_as_its_description_says():
                        size="tiny", scale=Scale.MOLECULAR)
     text = sheet_prompt(Style(name="Flat cartoon", features="crisp outlines"), group, "front", None)
     assert "single" not in text and "alone" not in text
-    assert "illustration of the air molecules: tiny pale grey spheres joined in pairs" in text
+    assert "illustration of tiny pale grey spheres joined in pairs. Shown large" in text and "air molecules" not in text
+    assert sheet_brief(group, "front").description.startswith("Tiny pale grey spheres joined in pairs. Judge")
     rules = " ".join(sheet_brief(group, "front").rules)
     assert "Exactly one object" not in rules and "As many items as the description says" in rules
+    assert "has no face" in rules                                # a real thing, but a song's character keeps its face
+    assert "has no face" not in " ".join(sheet_brief(group.model_copy(update={"kind": CastKind.CHARACTER}), "front").rules)

@@ -200,3 +200,41 @@ def test_a_labelled_shot_gets_its_word_drawn_in_the_open_third(stage, container)
     frame = np.frombuffer(raw, dtype=np.uint8).reshape(360, 640, 3)
     right, left = frame[120:180, 440:620], frame[120:180, 20:200]
     assert (right.min(axis=2) > 200).any() and not (left.min(axis=2) > 200).any()   # white word on the right only
+
+
+def test_a_songs_singer_is_cut_out_of_her_green_screen_and_laid_over_the_real_clip(stage, container):
+    service, storage, song, tmp_path = stage
+    girl = {"id": "singer", "kind": "person", "look": "A girl in a green jacket", "size": "child", "scale": "human",
+            "star": True}
+    shots = [{**shot("s01", "illustrate", "sea", ["ship"], "wide"), "start": 0.0, "end": 1.5},
+             {**shot("s02", "sung", "sea", ["singer", "ship"], "medium_close"), "start": 1.5, "end": 3.0,
+              "performer": "singer"}]
+    runs, assets = container.run_repository(), container.asset_repository().assets
+    record = container.song_repository().songs.add(Song(name="singer-film", audio_path=str(song), lyrics="x"))
+    run = runs.runs.add(Run(song_id=record.id, name="r", audience=GradeBand.G3_5))
+    green = tmp_path / "green.mp4"                                 # her clip: a red figure in the middle of a green screen
+    ff("-f", "lavfi", "-i", f"color=0x00b140:size=160x90:rate={FPS}:d=3,drawbox=x=60:y=20:w=40:h=70:color=red:t=fill",
+       "-c:v", "libx264", "-pix_fmt", "yuv420p", str(green))
+    files = {"s01": (StageName.VIDEO, clip(tmp_path / "a.mp4", ("blue", 1.5))),
+             "s02": (StageName.VIDEO, clip(tmp_path / "b.mp4", ("yellow", 1.5))),
+             "her": (StageName.LIPSYNC, green.read_bytes())}
+    made = {}
+    for name, (stage_name, data) in files.items():
+        storage.put(f"runs/{run.id}/{name}.mp4", data, "video/mp4")
+        made[name] = assets.add(Asset(run_id=run.id, stage=stage_name, kind=AssetKind.VIDEO, path=f"runs/{run.id}/{name}.mp4",
+                                      sha256=hashlib.sha256(data).hexdigest(), target_id=name, params={},
+                                      review=ReviewState.PASSED))
+    cast = [m for m in BOARD["cast"] if m["id"] == "ship"] + [girl]
+    runs.stage_states.add(StageState(run_id=run.id, stage=StageName.STORYBOARD, status=StageStatus.DONE,
+                                     output={**BOARD, "cast": cast, "shots": shots}))
+    runs.stage_states.add(StageState(run_id=run.id, stage=StageName.VIDEO, status=StageStatus.DONE,
+                                     output={"clips": {"s01": made["s01"].id, "s02": made["s02"].id}}))
+    runs.stage_states.add(StageState(run_id=run.id, stage=StageName.LIPSYNC, status=StageStatus.DONE,
+                                     output={"clips": {"s02": made["her"].id}, "offsets": {"s02": 0.5}}))
+    film = service.run(run.id)
+    state = runs.stage(run.id, StageName.ASSEMBLY)
+    assert state.status == StageStatus.DONE and state.output["shots"][1]["source"] == StageName.VIDEO
+    path = storage.path(film.path)
+    r, g, b = colour_at(path, 2.5)                                 # the real clip, with her red figure on it and no green
+    assert r > 240 and 200 < g < 250 and b < 30
+    assert near(colour_at(path, 1.5 - 0.2), (128, 128, 128))       # the look changes on a dissolve: blue into yellow

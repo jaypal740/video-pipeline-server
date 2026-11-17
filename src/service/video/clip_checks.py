@@ -66,12 +66,15 @@ def black_frames(grey: np.ndarray) -> int:
     return int((grey.reshape(len(grey), -1).max(axis=1) < BLACK).sum())
 
 
+NO_MOTION = "almost nothing moves"     # how the too-little-movement finding starts
+
+
 def problems_of(checks: "ClipChecks", wanted_seconds: float) -> list[str]:
     found = []
     if checks.seconds < wanted_seconds - DURATION_SLACK:
         found.append(f"the clip is {checks.seconds:.1f}s, {wanted_seconds}s was asked for")
     if checks.motion < MIN_MOTION:
-        found.append(f"almost nothing moves (motion {checks.motion:.2f}); the picture reads as a still")
+        found.append(f"{NO_MOTION} (motion {checks.motion:.2f}); the picture reads as a still")
     elif checks.tail_motion < STILL and (checks.active_seconds or 0.0) * MAX_SLOW < wanted_seconds - MAX_HOLD:
         found.append("the picture freezes before the end; the last second is a still frame")
     if checks.black_frames:

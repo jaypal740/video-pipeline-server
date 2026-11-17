@@ -111,3 +111,13 @@ def test_by_scene_the_pictures_are_cut_by_time_and_sung_lines_keep_their_own_sho
     long = song((0.0, 9.0, LineTag.ILLUSTRATE, None, "a"), (9.0, 10.0, LineTag.ILLUSTRATE, None, "b"))
     slots = make_slots(*long, beats=[], duration=10.0, shot_seconds=[3, 5], by_scene=True)
     assert spans(slots) == [(0.0, 5.0, [0], ShotKind.ILLUSTRATE), (5.0, 10.0, [0, 1], ShotKind.ILLUSTRATE)]
+
+
+def test_a_sung_line_timed_with_the_music_after_it_ends_when_it_did_the_first_time():
+    lines, lesson = song((0.0, 4.0, LineTag.FACE_TO_CAMERA, "chorus", "Metamorphosis!"),
+                         (4.0, 8.0, LineTag.ILLUSTRATE, "verse", "A drug arrives"),
+                         (8.0, 14.0, LineTag.FACE_TO_CAMERA, "chorus", "Metamorphosis!"),
+                         (14.0, 41.0, LineTag.FACE_TO_CAMERA, "chorus", "Metamorphosis!"))
+    slots = make_slots(lines, lesson, beats=[], duration=41.0, shot_seconds=[3, 5])
+    assert spans(slots)[2:4] == [(8.0, 14.0, [2], ShotKind.SUNG), (14.0, 18.0, [3], ShotKind.SUNG)]
+    assert all(s.kind == ShotKind.MUSIC and not s.lines for s in slots[4:]) and slots[-1].end == 41.0

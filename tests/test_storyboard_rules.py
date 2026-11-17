@@ -224,24 +224,38 @@ def test_a_sung_shot_needs_a_walkable_place_and_a_real_kit():
 
 def test_a_song_with_its_own_characters_has_a_star_who_sings():
     pip = CastMember(id="pip", kind=CastKind.CHARACTER, look="A plump green caterpillar with big amber eyes",
-                     size="thumb sized", scale=Scale.HUMAN, star=True)
+                     size="thumb sized", scale=Scale.HUMAN)
+    girl = CastMember(id="singer", kind=CastKind.PERSON, look="A girl of about ten in a green jacket", size="child",
+                      scale=Scale.HUMAN, star=True)
     fern = CastMember(id="fern", kind=CastKind.CHARACTER, look="A wide leaf with sleepy eyes", size="hand sized",
                       scale=Scale.HUMAN)
     ship = CastMember(id="ship", kind=CastKind.THING, look="A wooden steamship", size="long", scale=Scale.LANDSCAPE)
-    assert star_problems([pip, fern, ship], starred=True) == []
-    assert "star true" in star_problems([fern, ship], starred=True)[0]
-    assert "person or character" in star_problems([ship.model_copy(update={"star": True})], starred=True)[0]
+    assert star_problems([girl, pip, fern, ship], starred=True) == []
+    assert "star true" in star_problems([pip, fern, ship], starred=True)[0]
+    assert "its kind is person" in star_problems([pip.model_copy(update={"star": True})], starred=True)[0]   # not the lead
     assert len(star_problems([pip, fern, ship], starred=False)) == 2          # our host's videos have neither
-    assert header_problems(board(shot("s01"), cast=[pip, fern, ship]), BAND, slots(ShotKind.SUNG)) == []
+    assert header_problems(board(shot("s01"), cast=[girl, pip, fern, ship]), BAND, slots(ShotKind.SUNG)) == []
+    named = board(shot("s01", subjects=["pip"], start_state="Pip sits under Fern, who looks down."), cast=[pip, fern, ship])
+    found = shot_problems(named, slots(ShotKind.SUNG), BAND, FMT, None)          # a named character is in subjects
+    assert any("names Fern, who is not in its subjects" in p for p in found["s01"])
+    named.shots[0].subjects = ["pip", "fern"]
+    assert not any("names" in p for p in shot_problems(named, slots(ShotKind.SUNG), BAND, FMT, None).get("s01", []))
 
     s = slots(ShotKind.SUNG, ShotKind.SUNG)
-    sung = shot("s01", subjects=["fern", "pip", "ship"], start_state="The caterpillar grins on the leaf")
-    assert fix(sung, s[0], BAND, {"pip", "fern"}, {"pip"}) and sung.subjects == ["pip", "ship"]
-    draft = board(sung, shot("s02"), cast=[pip, fern, ship])
+    sung = shot("s01", subjects=["fern", "singer", "ship"], start_state="The ship rests on calm grey water")
+    assert fix(sung, s[0], BAND, {"singer", "pip", "fern"}, {"singer"}) and sung.subjects == ["singer", "ship"]
+    draft = board(sung, shot("s02"), cast=[girl, pip, fern, ship])
     found = shot_problems(draft, s, BAND, FMT, None)                           # no host: the star sings anywhere
     assert "s01" not in found and "list the star" in found["s02"][0]
-    draft.shots[1].subjects = ["pip"]
-    assert [x.performer for x in assemble(draft, s, None)[0]] == ["pip", "pip"]
+    draft.shots[1].subjects = ["singer"]
+    assert [x.performer for x in assemble(draft, s, None)[0]] == ["singer", "singer"]
+    draft.shots[1].start_state = "The singer stands at the left edge beside a ship"     # code adds her, no picture shows her
+    assert any("never in the picture" in p for p in shot_problems(draft, s, BAND, FMT, None)["s02"])
+    draft.shots[1].start_state = "A girl waves from the ship"
+    assert any("never in the picture" in p for p in shot_problems(draft, s, BAND, FMT, None)["s02"])
+    music = shot("s01", subjects=["singer", "ship"])
+    fix(music, slots(ShotKind.MUSIC)[0], BAND, {"singer", "pip", "fern"}, {"singer"})
+    assert music.subjects == ["ship"]
 
 
 def test_the_plans_characters_are_given_lead_first_with_another_look_when_asked():

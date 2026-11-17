@@ -131,8 +131,8 @@ class Continuity(StrEnum):
 class CastMember(BaseModel):
     """A person or thing that appears in more than one shot. look is copied word for word into every
     image prompt it appears in, next to its reference sheet. scale: the rung it is seen at, so a
-    hose-sized cable is never the subject of a planet-wide shot. star: the lead of a song that comes with its
-    own characters, who sings to camera in place of the host; a lead that changes form has one member per form."""
+    hose-sized cable is never the subject of a planet-wide shot. star: the singer of a song that comes with its
+    own characters, a person made for that song, who sings to camera in place of the host."""
 
     id: str
     kind: CastKind

@@ -44,7 +44,7 @@ class BandRules(BaseModel):
     camera_moves: list[str]
     max_people_in_frame: int
     max_camera_speed: str
-    # Image prompts: style_name names the medium ("A bold 2D cartoon"), style lists its design features
+    # Image prompts: style_name names the medium ("A hand-painted 2D storybook"), style lists its design features
     # (outlines, shading, proportions). look stays the plain-words version the planners read.
     style: str
     style_name: str

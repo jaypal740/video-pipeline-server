@@ -1,7 +1,7 @@
 from src.schema.storyboard.storyboard_schema import Storyboard
 from src.service.lesson.lesson_rules import band_rules
-from src.service.sheet.sheet_prompt import Style
-from src.service.video.clip_prompt import PROMPT_WORDS, STYLE_LINE, camera_words, clip_brief, clip_prompt, host_look_for
+from src.service.sheet.sheet_prompt import REAL, Style
+from src.service.video.clip_prompt import PROMPT_WORDS, REAL_LINE, STYLE_LINE, camera_words, clip_brief, clip_prompt, host_look_for
 from tests.test_keyframe_service import SHOTS, shot
 from tests.test_sheet_service import BOARD
 
@@ -27,7 +27,7 @@ def test_a_clip_prompt_is_short_positive_and_names_the_camera_in_spatial_words()
         assert len(words) <= PROMPT_WORDS and '"' not in text and not any(c.isdigit() for c in body)
         assert text.endswith(STYLE_LINE) == (s.kind != "sung")
     text = clip_prompt(STYLE, b.shots[-1], place, [cast["ship"]], None)
-    assert text.startswith("A bold 2D cartoon animation. The ship turns and sails toward the horizon. By the last frame, the ship")
+    assert text.startswith("A hand-painted 2D storybook animation. The ship turns and sails toward the horizon. By the last frame, the ship")
     assert "The camera pans to the right, slowly, steady, clear movement." in text
     assert "moving left to right across the frame" in text
     assert camera_words(b.shots[0]) == "the camera holds its framing"            # static
@@ -51,3 +51,11 @@ def test_the_clip_brief_judges_three_frames_against_the_three_moments():
     assert brief.moment == ("Opening: The ship sits on the grey sea with its sails full Action: The ship sails right "
                             "Ending: The ship is near the centre")
     assert len(brief.fatal) == 2 and all(f in brief.rules for f in brief.fatal)
+
+
+def test_a_song_singers_sung_shot_is_filmed_as_real_footage_of_its_action():
+    b = board(*SHOTS)
+    sung = next(s for s in b.shots if s.kind == "sung")
+    text = clip_prompt(REAL, sung, b.places[0], [], None, real=True)
+    assert text.startswith("Realistic documentary footage. The ship sails right. By the last frame, the ship is near")
+    assert text.endswith(REAL_LINE) and "lips together" not in text

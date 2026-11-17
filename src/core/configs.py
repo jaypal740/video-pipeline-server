@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     video_sung_mode: str = Field(default="skip", validation_alias="PIPELINE_VIDEO_SUNG_MODE")
     # Lip-sync: the host's sung shots, drawn from the keyframe and the song from the shot's start.
     lipsync_model: str = Field(default="minimax-h3-max-lipsync", validation_alias="PIPELINE_LIPSYNC_MODEL")
+    # A song's own singer is a moving clip first; this model then sets her mouth to the song.
+    singer_lipsync_model: str = Field(default="minimax-h3-max-video-lipsync",
+                                      validation_alias="PIPELINE_SINGER_LIPSYNC_MODEL")
     # Assembly: every clip at this size and frame rate; a dissolve overlaps two shots by this many seconds.
     assembly_width: int = Field(default=1280, validation_alias="PIPELINE_ASSEMBLY_WIDTH")
     assembly_height: int = Field(default=720, validation_alias="PIPELINE_ASSEMBLY_HEIGHT")
@@ -43,7 +46,7 @@ class Settings(BaseSettings):
     assembly_dissolve_s: float = Field(default=0.4, validation_alias="PIPELINE_ASSEMBLY_DISSOLVE_S")
     # Any one ffmpeg or ffprobe call that runs longer than this is stopped and fails its stage.
     ffmpeg_timeout_s: float = Field(default=600.0, validation_alias="PIPELINE_FFMPEG_TIMEOUT_S")
-    image_workers: int = Field(default=4, validation_alias="PIPELINE_IMAGE_WORKERS")
+    image_workers: int = Field(default=16, validation_alias="PIPELINE_IMAGE_WORKERS")
     # The judge's 0-10 score an image needs to pass; below it the image is drawn again. The judge gives a 6
     # to "the right picture with one small difference", which is good enough for a viewer.
     image_pass_score: int = Field(default=6, validation_alias="PIPELINE_IMAGE_PASS_SCORE")

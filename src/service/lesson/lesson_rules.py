@@ -57,6 +57,19 @@ def face_limit(band: GradeBand, video_type: VideoType, line_count: int) -> int:
     return int(share * line_count)
 
 
+def chorus_lines(lines: list[LyricLine]) -> set[int]:
+    return {l.index for l in lines if l.section == "chorus"}
+
+
+def sing_the_chorus(draft: LessonDraft, chorus: set[int]) -> None:
+    """The song's own chorus is what its singer sings to the viewer, and nothing else is."""
+    for entry in draft.lines:
+        if entry.index in chorus:
+            entry.tag, entry.number_text = LineTag.FACE_TO_CAMERA, None
+        elif entry.tag == LineTag.FACE_TO_CAMERA:
+            entry.tag = LineTag.ILLUSTRATE
+
+
 def _words(text: str) -> list[str]:
     return _WORD.findall(_AD_LIB.sub(" ", text.lower()))
 
@@ -190,8 +203,9 @@ def sequence_problems(draft: LessonDraft, lines: list[LyricLine], featured: list
 
 
 def problems(draft: LessonDraft, lines: list[LyricLine], band: GradeBand, types: list[VideoType],
-             featured: list[str] | None = None, most: int = MAX_SEQUENCES) -> list[str]:
-    """What the schema cannot check. An empty list means the draft is usable."""
+             featured: list[str] | None = None, most: int = MAX_SEQUENCES, chorus: bool = False) -> list[str]:
+    """What the schema cannot check. An empty list means the draft is usable. chorus: the song's chorus
+    decides which lines are sung to the viewer, so they are not counted against the limit."""
     found = []
     if [l.index for l in draft.lines] != [l.index for l in lines]:
         found.append(f"lines must be exactly indexes {[l.index for l in lines]} in order, one entry each")
@@ -215,7 +229,7 @@ def problems(draft: LessonDraft, lines: list[LyricLine], band: GradeBand, types:
         if entry.tag == LineTag.NUMBER and not (entry.number_text and entry.number_text.lower() in line.text.lower()):
             found.append(f"line {entry.index}: a number line needs number_text copied exactly from the line")
         faces += entry.tag == LineTag.FACE_TO_CAMERA
-    if draft.video_type in types:
+    if draft.video_type in types and not chorus:
         limit = face_limit(band, draft.video_type, len(lines))
         if faces > limit:
             found.append(f"{faces} lines are face_to_camera; at most {limit} are allowed for this band and type")

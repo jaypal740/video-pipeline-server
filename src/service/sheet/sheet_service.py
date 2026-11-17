@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from src.core.configs import Settings
@@ -11,15 +12,15 @@ from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.image.image_check_schema import Brief
 from src.schema.lesson.lesson_schema import GradeBand
 from src.schema.run.stage_state_schema import StageState
-from src.schema.storyboard.storyboard_schema import CastMember, Place
+from src.schema.storyboard.storyboard_schema import CastKind, CastMember, Place
 from src.service.image.fal_image_service import RESOLUTION, FalImageService
 from src.service.image.image_check_service import ImageCheckService
 from src.service.lesson.lesson_rules import band_rules
-from src.service.llm.llm_service import LabelledImage
-from src.service.sheet.sheet_prompt import (FACE_VIEWS, HOST_VIEWS, PLATE, Style, aspect_for, plate_brief,
+from src.service.llm.llm_service import LabelledImage, LlmService
+from src.service.sheet.sheet_prompt import (FACE_VIEWS, HOST_VIEWS, PLATE, SINGER_STYLE, Style, aspect_for, plate_brief,
                                             plate_prompt, sheet_brief, sheet_prompt, views_for)
 from src.service.sheet.sheet_layout import compose_sheet
-from src.service.stage.stage_common import add_cost, asset_url, storyboard_of
+from src.service.stage.stage_common import add_cost, add_llm_cost, asset_url, storyboard_of, write_correction
 from src.service.storage.storage_service import Storage
 from src.service.storyboard.storyboard_rules import HOST, host_in, outfit_text, wardrobe_for
 
@@ -41,13 +42,15 @@ class SheetService:
     attached to another picture."""
 
     def __init__(self, run_repository: RunRepository, asset_repository: AssetRepository, storage: Storage,
-                 images: FalImageService, check: ImageCheckService, settings: Settings) -> None:
+                 images: FalImageService, check: ImageCheckService, llm: LlmService, settings: Settings) -> None:
         self._runs = run_repository
         self._assets = asset_repository
         self._storage = storage
         self._images = images
         self._check = check
+        self._llm = llm
         self._settings = settings
+        self._records = threading.Lock()                # sheets draw side by side; records are written one at a time
 
     # --- hosts, once per band -------------------------------------------------------------------------
 
@@ -206,15 +209,17 @@ class SheetService:
         board = storyboard_of(self._runs, run_id)
         band = board.grade_band
         hosts = self.host_sheets(band)
-        if any(view not in hosts for view in KIT_VIEWS):              # side, back and expressions are optional
+        own_singer = any(m.star for m in board.cast)                  # a song with its own singer has no host
+        if not own_singer and any(view not in hosts for view in KIT_VIEWS):   # side, back and expressions are optional
             raise ValueError(f"grades {band} have no approved host yet; run `host draw` and `host approve` first")
         for place in board.places:                                    # the host dressed for each place
             if place.host_outfit and any(HOST in s.subjects and s.place == place.id for s in board.shots):
                 self.ensure_outfit(band, place.host_outfit)
-        style, anchor = Style.of(band_rules(band)), [hosts["front"]]
+        style = Style.of(band_rules(band))
         jobs = [(m, view) for m in board.cast if m.id != HOST for view in views_for(m)]
         jobs += [(p, PLATE) for p in board.places]
-        key = hashlib.sha256((self._settings.sheet_model + "|" + hosts["front"].sha256 + "|" + "|".join(
+        guide = "own-singer" if own_singer else hosts["front"].sha256
+        key = hashlib.sha256((self._settings.sheet_model + "|" + guide + "|" + "|".join(
             f"{t.id}:{t.look}:{v}" for t, v in jobs)).encode()).hexdigest()
 
         state = self._runs.stage(run_id, StageName.VISUAL_IDENTITY)
@@ -228,7 +233,22 @@ class SheetService:
         logger.info("sheets %s: %s, grades %s, %d images to draw", run_id[:8], self._settings.sheet_model, band,
                     len(jobs))
         try:
-            results = [self._sheet_job(run_id, style, anchor, *job) for job in jobs]
+            # a song with its own singer: its first place, drawn from words alone, sets the style of every sheet
+            first = self._sheet_job(run_id, style, [], board.places[0], PLATE) if own_singer else None
+            anchor = [first or hosts["front"]]
+            # the singer is drawn in 3D from her words, then her face from that picture, so both are one girl
+            singer = next((m for m in board.cast if m.star and m.kind == CastKind.PERSON), None)
+            body = self._sheet_job(run_id, SINGER_STYLE, [], singer, "front") if singer else None
+
+            def draw(job: tuple) -> Asset:
+                if job[0] is board.places[0] and first:
+                    return first
+                if job[0] is singer:
+                    return body if job[1] == "front" else self._sheet_job(run_id, SINGER_STYLE, [body], *job, "same")
+                return self._sheet_job(run_id, style, anchor, *job)
+
+            with ThreadPoolExecutor(max_workers=self._settings.image_workers) as pool:   # the rest, side by side
+                results = list(pool.map(draw, jobs))
         except Exception as exc:
             state.status, state.error, state.finished_at = StageStatus.FAILED, str(exc), utcnow()
             self._runs.stage_states.update(state)
@@ -253,59 +273,73 @@ class SheetService:
                    spent, (state.finished_at - state.started_at).total_seconds())
         return sheets
 
-    def _sheet_job(self, run_id: str, style: Style, anchor: list[Asset], target: CastMember | Place, view: str) -> Asset:
+    def _sheet_job(self, run_id: str, style: Style, anchor: list[Asset], target: CastMember | Place, view: str,
+                   reference: str = "style") -> Asset:
+        reference = reference if anchor else None                   # no anchor: drawn from words alone
         if view == PLATE:
             return self._draw(run_id, f"runs/{run_id}/sheets/{target.id}/plate.png", target.id, view,
-                              plate_prompt(style, target, reference="style"), anchor, aspect_for(None, PLATE),
+                              plate_prompt(style, target, reference=reference), anchor, aspect_for(None, PLATE),
                               plate_brief(target), self._settings.sheet_model)
         return self._draw(run_id, f"runs/{run_id}/sheets/{target.id}/{view}.png", target.id, view,
-                          sheet_prompt(style, target, view, reference="style"), anchor, aspect_for(target, view),
+                          sheet_prompt(style, target, view, reference=reference), anchor, aspect_for(target, view),
                           sheet_brief(target, view), self._settings.sheet_model)
 
     # --- drawing, checking, storing ---------------------------------------------------------------------
 
     def _draw(self, run_id: str | None, key: str, target_id: str, view: str, prompt: str, refs: list[Asset],
               aspect: str, brief: Brief, model: str) -> Asset:
-        """Draw, check, and try again on a new seed. When no try passes, the best-scoring one at or above the
-        floor is used (used_best); below the floor the image is failed. The seed comes from the prompt and
-        references, so the same look draws the same image in any run."""
+        """Draw, check, and try again on a new seed with a correction written from the judge's findings. When
+        no try passes, the best-scoring one at or above the floor is used (used_best); below the floor the
+        image is failed. The seed comes from the prompt and references, so the same look draws the same image
+        in any run. When every try fails, one more is drawn on the fallback model, which is weak at other things."""
         max_tries = self._settings.image_max_tries
-        tries = []
+        tries, findings = [], []
+        other = self._settings.image_fallback_model
+        plan = [(n, model) for n in range(1, max_tries + 1)] + ([(max_tries + 1, other)] if other and other != model else [])
         base = int(hashlib.sha256("|".join([prompt, *(r.sha256 for r in refs)]).encode()).hexdigest()[:8], 16) % 2**31
         ref_urls = [asset_url(self._storage, self._images.upload, r) for r in refs]
-        for attempt in range(1, max_tries + 1):
-            seed, thinking = base + attempt - 1, "medium" if attempt == max_tries else "minimal"
+        for attempt, model in plan:
+            seed, thinking = base + attempt - 1, "medium" if attempt >= max_tries else "minimal"
             cache_key = self._cache_key(model, prompt, refs, seed, aspect, thinking)
-            cached = self._assets.find_cached(cache_key)
-            if cached is not None and cached.review in USABLE:
-                logger.info("sheet %s/%s: reused %s", target_id, view, cached.id[:8])
-                return self._reuse(run_id, key, cached, target_id, view)
-            reply = self._images.generate(model, prompt, ref_urls, aspect, seed=seed, thinking=thinking)
-            asset = self._store(run_id, key, reply, prompt, refs, attempt, target_id=target_id, view=view,
-                                aspect=aspect, cache_key=cache_key)
+            with self._records:
+                cached = self._assets.find_cached(cache_key)
+                if cached is not None and cached.review in USABLE:
+                    logger.info("sheet %s/%s: reused %s", target_id, view, cached.id[:8])
+                    return self._reuse(run_id, key, cached, target_id, view)
+            correction, fix = (write_correction(self._llm, self._settings.image_check_model, logger, "sheet",
+                                                f"{target_id}/{view}", prompt, brief, findings)
+                               if findings else (None, None))
+            drawn = f"{prompt} {correction}" if correction else prompt
+            reply = self._images.generate(model, drawn, ref_urls, aspect, seed=seed, thinking=thinking)
+            with self._records:
+                asset = self._store(run_id, key, reply, drawn, refs, attempt, target_id=target_id, view=view,
+                                    aspect=aspect, cache_key=cache_key)
+                if fix is not None and run_id is not None:
+                    add_llm_cost(self._assets, run_id, StageName.VISUAL_IDENTITY, fix)
             labelled = [LabelledImage(label=f"reference sheet for {r.target_id}", data=self._storage.get(r.path))
                         for r in refs]
             checklist, call = self._check.check(reply.data, labelled, brief)
-            self._log_cost(run_id, StageName.VISUAL_IDENTITY, call.provider, call.model, call.cost_usd, target_id,
-                           call.input_tokens + call.output_tokens, "tokens")
             problems, notes = self._check.problems(checklist, brief), self._check.notes(checklist)
+            findings = notes
             asset.params = {**asset.params, "score": checklist.score}
             asset.review_notes = "\n".join(notes) or None
-            if not problems:
-                asset.review = ReviewState.PASSED
+            asset.review = ReviewState.FAILED if problems else ReviewState.PASSED
+            with self._records:
+                self._log_cost(run_id, StageName.VISUAL_IDENTITY, call.provider, call.model, call.cost_usd, target_id,
+                               call.input_tokens + call.output_tokens, "tokens")
                 self._assets.assets.update(asset)
+            if not problems:
                 logger.info("sheet %s/%s: passed on try %d, $%.3f, %.1fs", target_id, view, attempt, reply.cost_usd,
                             reply.seconds)
                 return asset
-            asset.review = ReviewState.FAILED
-            self._assets.assets.update(asset)
             tries.append(asset)
             logger.warning("sheet %s/%s: try %d failed %d checks:\n%s", target_id, view, attempt, len(problems),
                            "\n".join(f"  - {p}" for p in problems))
         best = max(tries, key=lambda a: a.params["score"])
         if best.params["score"] >= self._settings.image_floor_score:
             best.review = ReviewState.USED_BEST
-            self._assets.assets.update(best)
+            with self._records:
+                self._assets.assets.update(best)
             logger.warning("sheet %s/%s: no try passed; using the best, %d/10", target_id, view, best.params["score"])
         else:
             logger.error("sheet %s/%s: failed every draw; best %d/10", target_id, view, best.params["score"])

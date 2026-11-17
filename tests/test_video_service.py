@@ -20,10 +20,12 @@ class FakeFalVideo:
     name = "fal"
 
     def __init__(self):
-        self.calls = []
+        self.calls, self.refuse = [], None
 
     def generate(self, model, prompt, image_url, seconds, seed=None, negative=None, end_image_url=None):
         self.calls.append((model, image_url, seconds, seed, prompt, end_image_url))
+        if self.refuse and self.refuse in prompt:
+            raise ValueError("[{'type': 'content_policy_violation', 'categories': ['sexual']}]")
         return VideoReply(data=f"mp4|{prompt}|{seed}|audio".encode(), content_type="video/mp4", model=model, seed=seed,
                           seconds_requested=seconds, cost_usd=round(0.084 * seconds, 3), seconds=90.0,
                           request_id=f"req-{len(self.calls)}")
@@ -61,6 +63,8 @@ class FakeFfmpeg:
         out = Path(args[-1])
         if "-an" in args:
             out.write_bytes(Path(args[args.index("-i") + 1]).read_bytes().replace(b"|audio", b""))
+        elif "-filter_complex" in args:
+            out.write_bytes(f"mp4|pictures|{args[args.index('-filter_complex') + 1]}".encode())
         else:
             out.write_bytes(f"mp4|camera|{args[args.index('-vf') + 1]}".encode())
         return b""
@@ -127,6 +131,16 @@ def test_a_still_clip_fails_the_code_checks_and_the_retry_carries_the_finding(st
     assert all(a.review == ReviewState.PASSED for a in made.values())
 
 
+def test_a_shot_whose_every_try_moves_little_uses_the_try_that_moves_most(stage, container):
+    service, sheets, video, checks, vision = stage
+    run = drawn_run(container, sheets)
+    checks.fail_when = ("sails right", 99)                       # every try of s01 and s03 measures as a still
+    made = service.run(run.id)
+    state = container.run_repository().stage(run.id, StageName.VIDEO)
+    assert state.status == StageStatus.DONE and made["s01"].review == ReviewState.USED_BEST
+    assert made["s01"].params["score"] is None and "nothing moves" in made["s01"].review_notes
+
+
 def test_a_clip_that_fails_the_judge_uses_its_best_try_or_fails_the_stage(stage, container):
     service, sheets, video, checks, vision = stage
     run = drawn_run(container, sheets)
@@ -180,3 +194,14 @@ def test_a_shot_where_only_the_camera_moves_is_an_ffmpeg_move_over_its_keyframe(
     assert b"zoompan" in container.storage().get(made["s03"].path)
     again = service.run(run.id, force=True)                     # the same move on the same keyframe is made once
     assert again["s03"].id == made["s03"].id
+
+
+def test_a_clip_every_model_refuses_is_made_from_its_own_two_pictures(stage, container):
+    service, sheets, video, checks, vision = stage
+    run = drawn_run(container, sheets)
+    board = Storyboard(**container.run_repository().stage(run.id, StageName.STORYBOARD).output)
+    video.refuse = next(s for s in board.shots if s.id == "s01").action       # the content checker blocks this action
+    made = service.run(run.id)
+    state = container.run_repository().stage(run.id, StageName.VIDEO)
+    assert state.status == StageStatus.DONE and made["s01"].params["route"] == "pictures" and made["s01"].cost_usd == 0
+    assert b"xfade" in container.storage().get(made["s01"].path)

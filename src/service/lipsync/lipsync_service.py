@@ -21,11 +21,15 @@ from src.service.lipsync.fal_lipsync_service import FalLipsyncService, LipsyncRe
 from src.service.lipsync.lipsync_prices import lipsync_model
 from src.service.llm.llm_service import LabelledImage, LlmCall
 from src.service.local.ffmpeg_service import FfmpegService
-from src.service.sheet.sheet_prompt import NO_OVERLAY_TEXT
+from src.service.sheet.sheet_prompt import NO_OVERLAY_TEXT, STAGE
 from src.service.sheet.sheet_service import USABLE
 from src.service.stage.stage_common import add_cost, asset_url, keep_best, storyboard_of
 from src.service.storage.storage_service import Storage
+from src.service.storyboard.storyboard_rules import real_shots
 from src.service.video.clip_checks import DURATION_SLACK, ClipChecks, ClipCheckService
+from src.service.video.clip_prompt import NEGATIVE, SINGER_MOVE
+from src.service.video.fal_video_service import FalVideoService
+from src.service.video.video_prices import video_model
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +66,29 @@ def lipsync_brief(place: Place) -> Brief:
     return Brief(description=description, rules=rules, fatal=fatal)
 
 
+def singer_brief() -> Brief:
+    """What the judge scores a frame of a song's singer against: the plain-screen picture her clip was drawn from."""
+    fatal = [NO_OVERLAY_TEXT, f"No person or character that is not in the image labelled '{KEYFRAME_LABEL}'"]
+    return Brief(description=("Image 1 is a frame from a clip of a singer performing in front of a plain screen; image "
+                              "2 is the picture the clip was drawn from. An open or moving mouth, a changed expression, "
+                              "a turned head and moving arms are expected while singing and never a fault."),
+                 rules=["The same person as the keyframe: the same face, hair and clothes",
+                        "The background is one plain colour all around her, the same as in the keyframe, with nothing else in it", *fatal,
+                        "Nothing warped, melted together or broken; suitable for school children"], fatal=fatal)
+
+
+def singer_groups(shots: list[Shot], max_s: float) -> list[list[Shot]]:
+    """Sung shots that follow each other without a gap are one performance, so the singer moves through the
+    cuts behind her instead of starting again at each one; a performance is at most one clip long."""
+    groups: list[list[Shot]] = []
+    for shot in shots:
+        if groups and abs(shot.start - groups[-1][-1].end) < 0.05 and shot.end - groups[-1][0].start <= max_s:
+            groups[-1].append(shot)
+        else:
+            groups.append([shot])
+    return groups
+
+
 def code_problems(checks: ClipChecks, slot: float) -> list[str]:
     """The code checks that fit a singing face: long enough for the slot, no black frames. The motion rule
     is left out; a face that only sings moves too little for it."""
@@ -81,12 +108,13 @@ class LipsyncService:
 
     def __init__(self, run_repository: RunRepository, song_repository: SongRepository,
                  asset_repository: AssetRepository, storage: Storage, lipsync: FalLipsyncService,
-                 ffmpeg: FfmpegService, checks: ClipCheckService, check: ImageCheckService, settings: Settings) -> None:
+                 video: FalVideoService, ffmpeg: FfmpegService, checks: ClipCheckService, check: ImageCheckService, settings: Settings) -> None:
         self._runs = run_repository
         self._songs = song_repository
         self._assets = asset_repository
         self._storage = storage
         self._lipsync = lipsync
+        self._video = video
         self._ffmpeg = ffmpeg
         self._checks = checks
         self._check = check
@@ -94,14 +122,25 @@ class LipsyncService:
 
     def run(self, run_id: str, force: bool = False) -> dict[str, Asset]:
         board = storyboard_of(self._runs, run_id)
-        keyframes = self._keyframes(run_id)
-        model = self._settings.lipsync_model
+        real = real_shots(board.cast, board.shots)                  # a song's own singer: her clip, on green
+        model = self._settings.singer_lipsync_model if real else self._settings.lipsync_model
         spec = lipsync_model(model)
         places = {p.id: p for p in board.places}
         sung = [s for s in board.shots if s.kind == ShotKind.SUNG]
         shots = [s for s in sung if s.repeat_of is None]
         plans, blocked = [], []
-        for shot in shots:
+        self._offsets: dict[str, float] = {}                        # where each shot starts in its performance
+        groups = singer_groups(shots, video_model(self._settings.video_model).max_s) if real else []
+        sheet = self._singer_sheet(run_id, board) if real else None
+        for group in groups:
+            if sheet is None:
+                blocked += [s.id for s in group]
+                continue
+            slot = group[-1].end - group[0].start
+            self._offsets.update({s.id: round(s.start - group[0].start, 3) for s in group})
+            plans.append((group[0], sheet, slot, spec.seconds(slot), singer_brief()))
+        keyframes = {} if real else self._keyframes(run_id)
+        for shot in ([] if real else shots):
             keyframe = keyframes.get(shot.id)
             if keyframe is None or keyframe.review not in USABLE:
                 blocked.append(shot.id)
@@ -129,9 +168,13 @@ class LipsyncService:
             self._runs.stage_states.update(state)
             logger.error("lipsync %s: failed: %s", run_id[:8], exc)
             raise
+        for group in groups:                                        # every shot of a performance shows its one clip
+            made.update({s.id: made[group[0].id] for s in group[1:] if group[0].id in made})
         for shot in sung:                                           # a chorus repeat shows its original's clip
             if shot.repeat_of in made:
                 made[shot.id] = made[shot.repeat_of]
+                if shot.repeat_of in self._offsets:
+                    self._offsets[shot.id] = self._offsets[shot.repeat_of]
         self._finish(run_id, state, made, blocked, sung, len(plans))
         return made
 
@@ -144,7 +187,7 @@ class LipsyncService:
         state.error = ("; ".join(f"{s}: {self._errors.get(s, 'no usable keyframe')}" for s in blocked)
                        or ("no clip for " + ", ".join(missing) if missing else None))
         state.output = {"clips": {s: a.id for s, a in made.items()}, "used_best": used_best, "blocked": blocked,
-                        "errors": self._errors}
+                        "errors": self._errors, **({"offsets": self._offsets} if self._offsets else {})}
         state.finished_at = utcnow()
         self._runs.stage_states.update(state)
         retries = sum(a.params.get("try", 1) - 1 for s, a in made.items() if s == a.target_id)
@@ -204,12 +247,13 @@ class LipsyncService:
 
     def _guard_spend(self, run_id: str, model: str, seconds: list[float]) -> None:
         spec = lipsync_model(model)
-        first = sum(spec.price_per_s * n + JUDGE_USD for n in seconds)
+        per_s = spec.price_per_s + (video_model(self._settings.video_model).price_per_s if spec.source == "video" else 0)
+        first = sum(per_s * n + JUDGE_USD for n in seconds)
         worst = first * self._settings.image_max_tries
         spent = self._assets.run_cost(run_id)
         logger.info("lipsync %s: %d clips, %.1f seconds of audio at $%.3f/s, about $%.2f first time, at most $%.2f "
                     "with retries; $%.2f spent on the run so far, cap $%.2f", run_id[:8], len(seconds), sum(seconds),
-                    spec.price_per_s, first, worst, spent, self._settings.spend_cap_usd)
+                    per_s, first, worst, spent, self._settings.spend_cap_usd)
         if spent + worst > self._settings.spend_cap_usd:
             raise ValueError(f"lip-syncing {len(seconds)} clips could take run {run_id[:8]} to ${spent + worst:.2f}, "
                              f"past the cap of ${self._settings.spend_cap_usd:.2f}; raise PIPELINE_SPEND_CAP_USD "
@@ -220,7 +264,16 @@ class LipsyncService:
         """Network only: draw, strip the audio, check by code, judge the middle frame, retry on a new seed."""
         tries = []
         for attempt, seed, cache_key in seeds:
-            reply = self._lipsync.generate(model, image_url, audio_url, audio_seconds, seed=seed)
+            if lipsync_model(model).source == "video":          # the singer moving first, then her mouth on the song
+                clip = self._video.generate(self._settings.video_model, SINGER_MOVE, image_url,
+                                            video_model(self._settings.video_model).seconds(
+                                                max(slot, lipsync_model(model).min_video_s)), seed=seed,
+                                            negative=NEGATIVE)
+                reply = self._lipsync.generate(model, self._lipsync.upload(clip.data, "video/mp4"), audio_url,
+                                               audio_seconds, seed=seed)
+                reply = reply.model_copy(update={"cost_usd": round(reply.cost_usd + clip.cost_usd, 4)})
+            else:
+                reply = self._lipsync.generate(model, image_url, audio_url, audio_seconds, seed=seed)
             data = self._silent(reply.data)
             checks = self._checks.check(data, wanted_seconds=slot)
             problems = code_problems(checks, slot)
@@ -293,6 +346,14 @@ class LipsyncService:
         base = int(hashlib.sha256(what.encode()).hexdigest()[:8], 16) % 2**31
         return [(i + 1, base + i, hashlib.sha256(f"{model}|{what}|{base + i}".encode()).hexdigest())
                 for i in range(self._settings.image_max_tries)]
+
+    def _singer_sheet(self, run_id: str, board) -> Asset | None:
+        """The singer on her green screen, from the sheets stage."""
+        singer = next((c.id for c in board.cast if c.star), None)
+        state = self._runs.stage(run_id, StageName.VISUAL_IDENTITY)
+        sheet_id = ((state.output or {}).get("sheets", {}).get(singer, {}).get(STAGE)) if state else None
+        asset = self._assets.assets.get(sheet_id) if sheet_id else None
+        return asset if asset is not None and asset.review in USABLE else None
 
     def _keyframes(self, run_id: str) -> dict[str, Asset]:
         state = self._runs.stage(run_id, StageName.KEYFRAMES)

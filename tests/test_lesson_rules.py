@@ -5,7 +5,8 @@ from src.schema.lesson.lesson_schema import (GradeBand, KeyTerm, LessonDraft, Le
 from src.schema.song.song_analysis_schema import LyricLine
 from src.service.lesson.lesson_prompt import jamwise_direction, sequence_limit, user_prompt
 from src.service.lesson.lesson_rules import (allowed_types, band_for, band_rules, clear_keywords, face_limit,
-                                             format_rules, problems, repeats, scene_notes, sequence_problems)
+                                             format_rules, problems, repeats, scene_notes, sequence_problems,
+                                             chorus_lines, sing_the_chorus)
 
 LINES = [LyricLine(index=i, text=t, start=i, end=i + 1, confidence=0.9, unclear=(i == 2))
          for i, t in enumerate(["This is a colony.", "In 1858 it grew.", "Mumble words.", "Sing it with me!"])]
@@ -92,6 +93,23 @@ def test_a_chorus_sung_again_keeps_its_tag_but_shows_something_new():
     found = problems(draft(lines=lines, sequences=whole), CHORUS, GradeBand.G3_5, allowed_types(GradeBand.G3_5, None))
     assert found == ["line 2 repeats line 0; give it the same tag"]
     assert "2. [2.0-3.0s] [chorus] [repeat of 0] sing it!" in user_prompt(CHORUS, GradeBand.G3_5, [VideoType.CONCEPT], None)
+
+
+def test_a_jamwise_songs_chorus_is_what_its_singer_sings_however_long_it_is():
+    song = [LyricLine(index=i, text=f"line {i}", start=i, end=i + 1, confidence=0.9, section=s)
+            for i, s in enumerate((["chorus"] * 4 + ["verse"] * 2) * 3)]
+    lines = [LessonLine(index=i, teaches="t", show="s", tag=LineTag.ILLUSTRATE) for i in range(18)]
+    lines[4].tag, lines[0].tag, lines[0].number_text = LineTag.FACE_TO_CAMERA, LineTag.NUMBER, "0"
+    lesson = draft(lines=lines)
+    sing_the_chorus(lesson, chorus_lines(song))
+    assert [e.index for e in lesson.lines if e.tag == LineTag.FACE_TO_CAMERA] == [0, 1, 2, 3, 6, 7, 8, 9, 12, 13, 14, 15]
+    assert lesson.lines[4].tag == LineTag.ILLUSTRATE and lesson.lines[0].number_text is None
+    types = allowed_types(GradeBand.G3_5, None)
+    assert any("face_to_camera" in p for p in problems(lesson, song, GradeBand.G3_5, types))
+    assert not any("face_to_camera" in p for p in problems(lesson, song, GradeBand.G3_5, types, chorus=True))
+    prompt = user_prompt(song, GradeBand.G3_5, types, None, "The plan.")
+    assert "tag every [chorus] line face_to_camera and no other line" in prompt and "At most" not in prompt.split("Allowed video types")[1].split("The plan.")[0]
+    assert "face_to_camera lines." in user_prompt(song, GradeBand.G3_5, types, None)
 
 
 def test_a_sequence_says_what_it_shows_in_steps_that_fit_its_length():

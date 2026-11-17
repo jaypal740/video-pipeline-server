@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -24,26 +25,51 @@ WORD_PX = 64                      # an on-screen word, on JamWise's 1080 frame
 WORD_Y = 0.42                     # its centre line, as a share of the frame's height
 THIRD = {"left": 1 / 6, "right": 5 / 6}     # the open third's centre, as a share of the frame's width
 
+# A key word is shown as the 2D film shows it: from the moment it is sung, dark letters on a white plate with a
+# dark rim, popping in and out over POP seconds. The plate's sizes are shares of the frame's height; no plate
+# is wider than PLATE_WIDE of the frame's width (a longer word is drawn smaller) and it keeps PLATE_GAP of the
+# width clear at the frame's side. It sits in the top spot clear of the shot's subject.
+KEYWORD_SECONDS, POP, POP_STEPS = 2.0, 0.25, 6
+INK, PLATE = (28, 32, 28, 255), (255, 255, 255, 255)
+PLATE_PX, PLATE_PAD, PLATE_RIM, PLATE_WIDE, PLATE_GAP = 0.1, 0.035, 0.008, 0.42, 0.02
+SPOT = {"left": (0.22, 0.13), "right": (0.78, 0.13), "centre": (0.5, 0.13)}
+_WORD = re.compile(r"[a-z0-9']+")
+
+# A key word on screen: (start, end) in song seconds, the word, and its spot.
+Pop = tuple[float, float, str, str]
 # A stretch of the film with words drawn in its open third: (start, end) in song seconds, the words to
 # stack, and which third is open.
 Screen = tuple[float, float, tuple[str, ...], str]
 
 
+def sung_at(text: str, words: list[TimedWord]) -> float | None:
+    """When a key word starts being sung: the start of the first timed word that begins it."""
+    want = _WORD.findall(text.lower())
+    tokens = [(token, w.start) for w in words for token in _WORD.findall(w.text.lower())]
+    for i in range(len(tokens) - len(want) + 1):
+        if [token for token, _ in tokens[i:i + len(want)]] == want:
+            return tokens[i][1]
+    return None
+
+
 def caption_states(lines: list[LyricLine], words: list[TimedWord], offset: float, length: float,
-                   screen: list[Screen] | None = None
-                   ) -> list[tuple[float, float, int | None, int | None, Screen | None]]:
-    """What is drawn over the film, as (start, end, line index, lit word index, screen words) in film seconds;
-    line None is no caption. A line shows from its start to its end, or to the next line's start if sooner; a
-    word is lit from its start to its end, and is sung (white) after. Screen words show for their whole
-    stretch. offset: the song time the film starts at."""
+                   screen: list[Screen] | None = None, pops: list[Pop] | None = None
+                   ) -> list[tuple[float, float, int | None, int | None, Screen | None, tuple | None]]:
+    """What is drawn over the film, as (start, end, line index, lit word index, screen words, key word) in film
+    seconds; line None is no caption. A line shows from its start to its end, or to the next line's start if
+    sooner; a word is lit from its start to its end, and is sung (white) after. Screen words show for their
+    whole stretch. A key word is (word, spot, how far popped, 0 to 1): it pops in over POP seconds and out
+    again, in POP_STEPS steps. offset: the song time the film starts at."""
     timed = [l for l in lines if any(w.line_index == l.index for w in words)]
-    screen = screen or []
+    screen, pops = screen or [], pops or []
     cuts = {0.0, length}
     for i, line in enumerate(timed):
         stop = min(line.end, timed[i + 1].start) if i + 1 < len(timed) else line.end
         cuts |= {line.start - offset, stop - offset}
         cuts |= {t - offset for w in words if w.line_index == line.index for t in (w.start, w.end)}
     cuts |= {t - offset for a, b, *_ in screen for t in (a, b)}
+    cuts |= {t - offset for a, b, *_ in pops for i in range(POP_STEPS + 1)
+             for t in (a + i * POP / POP_STEPS, b - i * POP / POP_STEPS) if a <= t <= b}
     edges = sorted(t for t in cuts if 0.0 <= t <= length)
     states = []
     for a, b in zip(edges, edges[1:]):
@@ -53,7 +79,9 @@ def caption_states(lines: list[LyricLine], words: list[TimedWord], offset: float
         lit = None if line is None else next(
             (w.index for w in words if w.line_index == line.index and w.start <= t <= w.end), None)
         shown = next((s for s in screen if s[0] <= t < s[1]), None)
-        state = (line.index if line else None, lit, shown)
+        pop = next((p for p in pops if p[0] <= t < p[1]), None)
+        popped = pop and (pop[2], pop[3], round(min(1.0, (t - pop[0]) / POP, (pop[1] - t) / POP), 3))
+        state = (line.index if line else None, lit, shown, popped)
         if states and states[-1][2:] == state:
             states[-1] = (states[-1][0], b, *state)
         else:
@@ -62,13 +90,16 @@ def caption_states(lines: list[LyricLine], words: list[TimedWord], offset: float
 
 
 def caption_image(words: list[TimedWord], t: float | None, width: int, height: int,
-                  screen: Screen | None = None) -> Image.Image:
+                  screen: Screen | None = None, pop: tuple[str, str, float] | None = None) -> Image.Image:
     """The frame-sized see-through picture of one line at song time t: words before t sung, the word at t
-    lit, the rest upcoming; plus the screen words stacked in the open third. No words gives an empty picture."""
+    lit, the rest upcoming; plus the screen words stacked in the open third and the key word on its plate.
+    No words gives an empty picture."""
     frame = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     unit = height / JAMWISE_SIZE
     if screen is not None:
         _draw_screen(frame, screen, unit)
+    if pop is not None:
+        _draw_pop(frame, *pop)
     if not words:
         return frame
     font = ImageFont.truetype(str(FONT), round(FONT_PX * unit))
@@ -116,20 +147,42 @@ def _draw_screen(frame: Image.Image, screen: Screen, unit: float) -> None:
                   stroke_fill=OUTLINE)
 
 
+def _draw_pop(frame: Image.Image, text: str, spot: str, popped: float) -> None:
+    """A key word on its plate at its spot, grown and faded in as far as it has popped."""
+    font = ImageFont.truetype(str(FONT), round(PLATE_PX * frame.height))
+    pad, rim = round(PLATE_PAD * frame.height), max(2, round(PLATE_RIM * frame.height))
+    left, top, right, bottom = font.getbbox(text)
+    plate = Image.new("RGBA", (right - left + 2 * pad + 2 * rim, bottom - top + 2 * pad + 2 * rim), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(plate)
+    draw.rounded_rectangle((0, 0, plate.width - 1, plate.height - 1), radius=pad, fill=PLATE, outline=INK, width=rim)
+    draw.text((rim + pad - left, rim + pad - top), text, font=font, fill=INK)
+    fit = min(1.0, PLATE_WIDE * frame.width / plate.width)
+    u = min(1.0, max(0.0, popped)) - 1
+    grow = fit * (0.6 + 0.4 * (1 + 2.70158 * u ** 3 + 1.70158 * u ** 2))          # past full size, then settle
+    if grow != 1:
+        plate = plate.resize((max(2, round(plate.width * grow)), max(2, round(plate.height * grow))), Image.LANCZOS)
+    if popped < 0.5:
+        plate.putalpha(plate.getchannel("A").point(lambda v: round(v * 2 * popped)))
+    x, y = SPOT[spot]
+    reach = plate.width / 2 + PLATE_GAP * frame.width
+    x = min(max(x * frame.width, reach), frame.width - reach)
+    frame.alpha_composite(plate, (round(x - plate.width / 2), round(y * frame.height - plate.height / 2)))
+
+
 def caption_track(lines: list[LyricLine], words: list[TimedWord], offset: float, length: float, width: int,
-                  height: int, work: Path, screen: list[Screen] | None = None) -> Path:
-    """The captions and screen words as pictures with their durations, written for ffmpeg's concat reader;
-    returns the list. Each distinct picture is drawn once."""
+                  height: int, work: Path, screen: list[Screen] | None = None, pops: list[Pop] | None = None) -> Path:
+    """The captions, screen words and key words as pictures with their durations, written for ffmpeg's concat
+    reader; returns the list. Each distinct picture is drawn once."""
     drawn: dict[tuple, Path] = {}
     entries = []
-    for a, b, line, lit, shown in caption_states(lines, words, offset, length, screen):
-        key = (line, lit, shown)
+    for a, b, line, lit, shown, pop in caption_states(lines, words, offset, length, screen, pops):
+        key = (line, lit, shown, pop)
         if key not in drawn:
             own = [w for w in words if w.line_index == line] if line is not None else []
             lit_word = next((w for w in own if w.index == lit), None)
             t = (lit_word.start + lit_word.end) / 2 if lit_word else a + offset + (b - a) / 2
             path = work / f"caption-{len(drawn)}.png"
-            caption_image(own, t, width, height, shown).save(path)
+            caption_image(own, t, width, height, shown, pop).save(path)
             drawn[key] = path
         entries.append(f"file '{drawn[key].name}'\nduration {b - a:.4f}")
     listing = work / "captions.txt"

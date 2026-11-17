@@ -145,16 +145,23 @@ def header_problems(draft: StoryboardDraft, band: BandRules, slots: list[Slot],
 
 
 def star_problems(cast: list[CastMember], starred: bool) -> list[str]:
-    """A song that comes with its own characters marks its lead as the star; no other board has a star or a
-    character."""
+    """A song that comes with its own characters has one singer, a person made for it, marked as the star; no
+    other board has a star or a character."""
     if not starred:
         return [f"cast {c.id}: only a song with its own characters has a star or kind character"
                 for c in cast if c.star or c.kind == CastKind.CHARACTER]
-    found = [f"cast {c.id} is the star, so its kind is person or character" for c in cast
-             if c.star and c.kind == CastKind.THING]
-    if not any(c.star for c in cast):
-        found.append("cast must give the song's lead with star true; it sings to camera")
+    found = [f"cast {c.id} is the star, so its kind is person: the singer is a girl made for this song, and the "
+             "song's characters have star false" for c in cast if c.star and c.kind != CastKind.PERSON]
+    if sum(c.star for c in cast) != 1:
+        found.append("cast must give the song's singer once, kind person with star true; she sings to camera")
     return found
+
+
+def real_shots(cast: list[CastMember], shots: list[Shot]) -> set[str]:
+    """The sung shots of a song with its own singer: she is laid over them, so the picture itself is real
+    footage of what her words name."""
+    singers = {c.id for c in cast if c.star and c.kind == CastKind.PERSON}
+    return {s.id for s in shots if s.kind == ShotKind.SUNG and s.performer in singers}
 
 
 def sequence_place_problems(header: BoardHeader, sequences: list[LessonSequence]) -> list[str]:
@@ -213,6 +220,8 @@ def fix(shot: ShotDraft, slot: Slot, band: BandRules, people: set[str], stars: s
             shot.size = ShotSize.MEDIUM_CLOSE
         if cam.move not in (CameraMove.STATIC, CameraMove.PUSH_IN):
             cam.move = CameraMove.STATIC
+    elif stars:                                                 # the singer is seen only where she sings
+        shot.subjects = [s for s in shot.subjects if s not in stars]
     if (slot.kind == ShotKind.NUMBER or shot.label) and shot.position == Position.CENTRE:
         shot.position = Position.RIGHT_THIRD
     if cam.move in _NO_DIRECTION:
@@ -337,6 +346,19 @@ def shot_problems(draft: StoryboardDraft, slots: list[Slot], band: BandRules, fm
         faced = any(cast[s].kind != CastKind.THING for s in shot.subjects if s in cast)
         if host is None and slot.kind == ShotKind.SUNG and not any(cast[s].star for s in shot.subjects if s in cast):
             add(slot.id, "a sung shot shows the lead singing; list the star first in subjects")
+        said = f"{shot.start_state} {shot.action} {shot.end_state}"
+        stars = [c.id for c in draft.cast if c.star]            # the singer is laid over the picture by code
+        if stars and (any(re.search(rf"\b{re.escape(s)}\b", said, re.I) for s in stars)
+                      or (slot.kind == ShotKind.SUNG and _PERSON.search(said))):
+            add(slot.id, "the shot describes the singer; she is never in the picture, our code adds her: describe "
+                         "only what is filmed, with no person in it")
+        for c in draft.cast:                                    # a song's character named in a shot is drawn from its sheet
+            name = c.id.split("_")[0].capitalize()
+            if (c.kind == CastKind.CHARACTER and not any(s.split("_")[0] == c.id.split("_")[0] for s in shot.subjects)
+                    and re.search(rf"\b{re.escape(name)}\b", f"{shot.start_state} {shot.action} {shot.end_state}")):
+                add(slot.id, f"the shot names {name}, who is not in its subjects; list them in subjects, or leave "
+                             "the name out and describe only what is seen")
+                break
         if people > band.max_people_in_frame:
             add(slot.id, f"{people} people in frame; at most {band.max_people_in_frame} for grades {band.band}")
         if shot.place in places:

@@ -111,6 +111,7 @@ class Container(containers.DeclarativeContainer):
         storage=storage,
         images=fal_image_service,
         check=image_check_service,
+        llm=llm_service,
         settings=settings,
     )
     keyframe_service = providers.Singleton(
@@ -143,6 +144,7 @@ class Container(containers.DeclarativeContainer):
         asset_repository=asset_repository,
         storage=storage,
         lipsync=fal_lipsync_service,
+        video=fal_video_service,
         ffmpeg=ffmpeg_service,
         checks=clip_check_service,
         check=image_check_service,

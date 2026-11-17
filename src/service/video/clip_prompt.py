@@ -13,8 +13,15 @@ PROMPT_WORDS = 60
 NEGATIVE = "text, captions, subtitles, watermark, extra people, extra characters, distortion, blur"
 # Added after the shot's own words. On the 2026-11-02 style test it removed H3's glow and flares and its
 # overacting faces; a mouth stays closed because only the lip-sync stage gives anyone words.
-STYLE_LINE = ("Faces stay calm with the mouth closed unless the action says otherwise. Flat, even cartoon colours "
-              "with crisp outlines and soft, even light.")
+# What a song's singer does in her own clip, in front of her plain screen; a second model then moves her mouth.
+SINGER_MOVE = ("A stylised 3D animated film. The girl sings happily to the camera and dances lightly on the spot, "
+               "bouncing and swaying to the beat, her shoulders, arms and head moving with the music. She gestures with her raised hand toward the space beside her, glances "
+               "over at it with delight, then looks back to the camera and lifts both hands as she sings. The "
+               "background stays the one flat, plain colour it starts as, she stays the same size in the frame and the camera holds "
+               "its framing.")
+REAL_LINE = "Natural light and true colours, with steady forms and a clean picture."
+STYLE_LINE = ("Faces stay calm with the mouth closed unless the action says otherwise. Soft painted colours with "
+              "steady brush texture and warm, even light.")
 
 _MOVE = {CameraMove.STATIC: "the camera holds its framing", CameraMove.PAN: "the camera pans {d}",
          CameraMove.TILT: "the camera tilts {d}", CameraMove.PUSH_IN: "the camera pushes in slowly",
@@ -41,11 +48,13 @@ def camera_words(shot: Shot) -> str:
     return words
 
 
-def clip_prompt(style: Style, shot: Shot, place: Place, subjects: list[CastMember], host_look: str | None) -> str:
+def clip_prompt(style: Style, shot: Shot, place: Place, subjects: list[CastMember], host_look: str | None,
+                real: bool = False) -> str:
     """What the video model is told, from the storyboard: the action, how it ends, the camera, how much
     moves. A sung shot asks for a calm host with the lips together, so a later lip-sync pass has a still
-    mouth to animate. Quotes and digits never appear: both make the model draw text."""
-    if shot.kind == ShotKind.SUNG:
+    mouth to animate; real: a sung shot whose singer is laid over it later is filmed like any picture shot,
+    as real footage. Quotes and digits never appear: both make the model draw text."""
+    if shot.kind == ShotKind.SUNG and not real:
         who = host_look or "the person"
         parts = [f"{who[0].upper()}{who[1:]} faces the camera with the lips together and a calm, friendly face, "
                  "breathing gently, the head and shoulders moving a little.", f"{camera_words(shot).capitalize()}."]
@@ -58,8 +67,8 @@ def clip_prompt(style: Style, shot: Shot, place: Place, subjects: list[CastMembe
             parts.append(f"{camera_words(shot).capitalize()}, {_MOTION[shot.motion]}.")
         if shot.screen_direction in _SCREEN:
             parts.append(f"The subject is {_SCREEN[shot.screen_direction]}.")
-        parts.append(STYLE_LINE)
-    return f"{style.name} animation. {clean(' '.join(parts))}"   # the style name keeps its own digits (2D)
+        parts.append(REAL_LINE if real else STYLE_LINE)
+    return f"{style.name} {style.motion}. {clean(' '.join(parts))}"   # the style name keeps its own digits (2D)
 
 
 def clean(text: str) -> str:

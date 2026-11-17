@@ -15,17 +15,19 @@ from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.image.image_check_schema import Brief
 from src.schema.run.stage_state_schema import StageState
 from src.schema.storyboard.storyboard_schema import Moves, Shot, ShotKind
+from src.service.image.fal_errors import refused
 from src.service.image.image_check_service import ImageCheckService
 from src.service.lesson.lesson_rules import band_rules
 from src.service.llm.llm_service import LabelledImage, LlmCall, LlmService
 from src.service.local.ffmpeg_service import FfmpegService
-from src.service.sheet.sheet_prompt import Style
+from src.service.sheet.sheet_prompt import REAL, Style
 from src.service.sheet.sheet_service import USABLE
 from src.service.stage.stage_common import (PASSED, StopLoss, add_cost, asset_url, keep_best, storyboard_of,
                                             write_correction)
 from src.service.storage.storage_service import Storage
-from src.service.video.camera_move import move_filter
-from src.service.video.clip_checks import ClipCheckService, ClipChecks
+from src.service.storyboard.storyboard_rules import real_shots
+from src.service.video.camera_move import dissolve_filter, move_filter
+from src.service.video.clip_checks import NO_MOTION, ClipCheckService, ClipChecks
 from src.service.video.clip_prompt import NEGATIVE, clip_brief, clip_prompt, host_look_for
 from src.service.video.fal_video_service import FalVideoService, VideoReply
 from src.service.video.video_prices import video_model
@@ -82,19 +84,21 @@ class VideoService:
         cast = {c.id: c for c in board.cast}
         places = {p.id: p for p in board.places}
         shots = [s for s in board.shots if s.repeat_of is None]
+        real = real_shots(board.cast, board.shots)                  # sung shots the singer is laid over: real footage
         plans, moves, blocked = [], [], []
         for shot in shots:
             keyframe = keyframes.get(shot.id)
             if keyframe is None or keyframe.review not in USABLE:
                 blocked.append(shot.id)
                 continue
-            if shot.kind == ShotKind.SUNG and self._settings.video_sung_mode == "skip":
+            if shot.kind == ShotKind.SUNG and shot.id not in real and self._settings.video_sung_mode == "skip":
                 continue                                        # the lip-sync stage makes this one
             if shot.kind != ShotKind.SUNG and shot.moves == Moves.CAMERA:
                 moves.append((shot, keyframe))
                 continue
-            subjects = [cast[s] for s in shot.subjects]
-            prompt = clip_prompt(style, shot, places[shot.place], subjects, host_look_for(subjects))
+            subjects = [] if shot.id in real else [cast[s] for s in shot.subjects]
+            prompt = clip_prompt(REAL if shot.id in real else style, shot, places[shot.place], subjects,
+                                 host_look_for(subjects), real=shot.id in real)
             seconds = spec.seconds((shot.end - shot.start) * self._settings.video_length_factor)
             end = ends.get(shot.id)
             plans.append((shot, prompt, keyframe, seconds, clip_brief(shot, places[shot.place], subjects), end))
@@ -211,8 +215,17 @@ class VideoService:
 
     def _keep(self, shot_id: str, tries: list[Asset]) -> Asset | None:
         """Which of a shot's tries the stage uses (see keep_best). A clip the code checks failed has no score
-        and is never used."""
+        and is never used, except when its one fault is too little movement and no try did better: a small
+        thing moving in a wide view measures as a still, so the try that moves most is used, marked used_best."""
         scored = [a for a in tries if a.params.get("score") is not None]
+        slow = [a for a in tries if a.params.get("checks") and all(c.startswith(NO_MOTION) for c in a.params["checks"])]
+        if not scored and slow:
+            best = max(slow, key=lambda a: a.params.get("motion") or 0)
+            best.review = ReviewState.USED_BEST
+            self._assets.assets.update(best)
+            logger.warning("clip %s: every try moves little; using the one that moves most (motion %s)", shot_id,
+                           best.params.get("motion"))
+            return best
         return keep_best(self._assets, self._settings.image_floor_score, logger, "clip", shot_id, tries,
                          self._errors, scored, pool_only=True)
 
@@ -231,7 +244,9 @@ class VideoService:
                 logger.info("clip %s: reused %s (%s)", shot.id, usable.id[:8], usable.review)
                 made[shot.id] = usable
             elif not left:
-                self._keep(shot.id, tried)
+                kept = self._keep(shot.id, tried)
+                if kept is not None:
+                    made[shot.id] = kept
             else:
                 last = max(tried, key=lambda c: c.params.get("try", 1), default=None)
                 findings = (last.review_notes or "").splitlines() if last is not None else []
@@ -251,6 +266,10 @@ class VideoService:
                 try:
                     tries = future.result()
                 except Exception as exc:
+                    if refused(exc) and end is not None:        # no model will draw it: its own two pictures do
+                        logger.warning("clip %s: refused by the content checker; made from its two pictures", shot.id)
+                        made[shot.id] = self._pictures(run_id, shot, keyframe, end)
+                        continue
                     logger.error("clip %s: error: %s", shot.id, exc)
                     self._errors[shot.id] = str(exc)
                     continue
@@ -393,6 +412,35 @@ class VideoService:
             sha256=hashlib.sha256(data).hexdigest(), target_id=shot.id, cache_key=cache_key, provider="ffmpeg",
             model="ffmpeg", prompt=None,
             params={"try": 1, "route": "camera", "keyframe": keyframe.id, "move": shot.camera.move,
+                    "seconds": frames / s.assembly_fps, "frames": frames},
+            cost_usd=0.0, review=ReviewState.PASSED))
+
+    def _pictures(self, run_id: str, shot: Shot, keyframe: Asset, end: Asset) -> Asset:
+        """The clip of a shot no video model will draw: ffmpeg dissolves its approved opening picture into its
+        approved ending picture under a slow push in. The same two pictures are joined once."""
+        s, frames = self._settings, self._move_frames(shot)
+        cache_key = hashlib.sha256(f"pictures|{keyframe.sha256}|{end.sha256}|{frames}|{s.assembly_width}x"
+                                   f"{s.assembly_height}@{s.assembly_fps}".encode()).hexdigest()
+        cached = self._assets.find_cached(cache_key)
+        if cached is not None:
+            return cached
+        with tempfile.TemporaryDirectory() as tmp:
+            first, last, clip = Path(tmp) / "open.png", Path(tmp) / "end.png", Path(tmp) / "clip.mp4"
+            first.write_bytes(self._storage.get(keyframe.path))
+            last.write_bytes(self._storage.get(end.path))
+            still = ["-loop", "1", "-framerate", str(s.assembly_fps), "-t", f"{frames / s.assembly_fps:.3f}", "-i"]
+            self._ffmpeg.run([*still, str(first), *still, str(last), "-filter_complex",
+                              dissolve_filter(frames, s.assembly_width, s.assembly_height, s.assembly_fps),
+                              "-frames:v", str(frames), "-c:v", "libx264", "-crf", "18", str(clip)])
+            data = clip.read_bytes()
+        asset_id = new_id()
+        path = f"runs/{run_id}/clips/{shot.id}/pictures-{asset_id[:8]}.mp4"
+        self._storage.put(path, data, "video/mp4")
+        return self._assets.assets.add(Asset(
+            id=asset_id, run_id=run_id, stage=StageName.VIDEO, kind=AssetKind.VIDEO, path=path,
+            sha256=hashlib.sha256(data).hexdigest(), target_id=shot.id, cache_key=cache_key, provider="ffmpeg",
+            model="ffmpeg", prompt=None,
+            params={"try": 1, "route": "pictures", "keyframe": keyframe.id, "end_keyframe": end.id,
                     "seconds": frames / s.assembly_fps, "frames": frames},
             cost_usd=0.0, review=ReviewState.PASSED))
 

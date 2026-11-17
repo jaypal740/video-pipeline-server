@@ -1,18 +1,18 @@
 from src.schema.lesson.lesson_schema import GradeBand, VideoType
 from src.schema.song.song_analysis_schema import LyricLine
 from src.service.lesson.lesson_rules import (MAX_SEQUENCE_SECONDS, MAX_SEQUENCES, MAX_STEPS, MIN_SEQUENCE_SECONDS,
-                                             MAX_SHOWN_TERMS, MIN_STEPS, band_rules, face_limit, format_rules,
-                                             place_limit, repeats, step_seconds)
+                                             MAX_SHOWN_TERMS, MIN_STEPS, band_rules, chorus_lines, face_limit,
+                                             format_rules, place_limit, repeats, step_seconds)
 
 # Bumped whenever the prompt changes, so every run is planned again with the new prompt.
-PROMPT_VERSION = "lesson.v5"
+PROMPT_VERSION = "lesson.v8"
 
 _PEOPLE_ONLY = ("Only people, such as a narrator or presenter, are characters. Cells, germs, molecules, animals, "
                 "objects and ideas look and behave as they really do: never cartoon faces, eyes or human expressions "
                 "on them, and no invented mascots or metaphors standing in for the real thing.")
 # A JamWise song comes with its own characters, who take the place of the host.
-_PLAN_CHARACTERS = ("The song's plan names its characters, and they are the video's characters: the lead performs "
-                    "the song and acts in the scenes as the plan says, and the others appear where the plan puts "
+_PLAN_CHARACTERS = ("The song's plan names its characters, and they are the video's characters: the lead acts "
+                    "in the scenes as the plan says, and the others appear where the plan puts "
                     "them. A character that is an animal or a thing may have a face and feelings, but its body, its "
                     "life stages and what it does stay true to the real thing. Everything else, cells, germs, "
                     "molecules, other animals and objects, looks and behaves as it really does: no faces on them "
@@ -78,7 +78,7 @@ or misleading, say so in must_not_teach rather than illustrating the error."""
 
 
 SYSTEM = _system(_PEOPLE_ONLY, "a person (the narrator or a presenter)")
-JAMWISE_SYSTEM = _system(_PLAN_CHARACTERS, "the plan's lead", _KEYWORD)
+JAMWISE_SYSTEM = _system(_PLAN_CHARACTERS, "the song's own singer", _KEYWORD)
 
 
 def jamwise_direction(export: dict) -> str:
@@ -90,9 +90,17 @@ def jamwise_direction(export: dict) -> str:
              "plan's scenes, in the plan's order: each scene is one sequence, set in the scene's place, with its "
              "change and steps taken from what the scene says happens and how it shows the idea. The section "
              "notes say which scenes a verse or bridge holds; give each scene the lines that sing about it. Each "
-             "chorus is its own sequence showing the chorus picture, and the last sequence closes on the ending "
-             "picture. A sequence's steps show what its own lines sing, in the order they sing it. A chorus sung "
-             "again may look different, but its steps still show what its lines name. Scenes set in the same location share one place. Join a scene to the next one only when "
+             "chorus is its own sequence. A chorus is not a scene of the story: the song's own singer, a girl who "
+             "stands beside the picture, sings it, and no character of the plan sings or appears in it. Behind her "
+             "plays real footage of what each line names. For a chorus line, show is that footage: the thing the "
+             "line names, whole, with something visibly happening to it, at whatever point in its life the line is "
+             "about. A chorus sequence's change, fact and steps are the things its lines name, one step per line in "
+             "the order sung. A chorus sung again shows the same things at a new moment. The "
+             "singer is never in the picture and is never mentioned in show, change, fact or steps: our code adds "
+             "her, so describe only the footage. Each chorus line's footage is one change that fits its few seconds, "
+             "never a time-lapse of several stages. The last sequence closes "
+             "on the ending picture. A sequence's steps show what its own lines sing, in the order they sing it. "
+             "Scenes set in the same location share one place. Join a scene to the next one only when "
              "it is too short to be a sequence alone, keeping both scenes' steps in order; a scene no line sings "
              "about gets no sequence. A line's show is the moment of its scene that happens while that line is "
              f"sung, not a new picture of its own. This song may use up to {sequence_limit(export)} sequences. "
@@ -103,7 +111,7 @@ def jamwise_direction(export: dict) -> str:
              "plan writes a word or figure into the picture, leave it out: our code labels terms and draws "
              "numbers. Leave out anything a character says that the song does not sing. Show an animal or thing "
              "once in a picture, never two of it side by side. The plan's characters are listed below; where a "
-             "rule says host, narrator or presenter, that is the plan's lead."]
+             "rule says host, narrator or presenter, that is the song's own singer."]
     parts += [f"- Learning goal: {g}" for g in package.get("learningObjectives", [])]
     parts += [f"- Character {c.get('name')} ({c.get('role')}): {c.get('concept')}. Looks like: "
               f"{c.get('visualDescription')}" for c in brief.get("cast", []) if c.get("name")]
@@ -154,10 +162,11 @@ def sequence_limit(export: dict) -> int:
 def user_prompt(lines: list[LyricLine], band: GradeBand, types: list[VideoType], brief: str | None,
                 direction: str | None = None) -> str:
     rules = band_rules(band)
+    chorus = direction is not None and bool(chorus_lines(lines))
     formats = "\n".join(
         f"- {t}: Pick it when: {format_rules(t).pick_when} World: {format_rules(t).world} "
-        f"On camera: {format_rules(t).on_camera} "
-        f"At most {face_limit(band, t, len(lines))} face_to_camera lines."
+        f"On camera: {format_rules(t).on_camera}"
+        + ("" if chorus else f" At most {face_limit(band, t, len(lines))} face_to_camera lines.")
         for t in types)
     again = repeats(lines)
     lyric = "\n".join(f"{l.index}. [{l.start:.1f}-{l.end:.1f}s]{f' [{l.section}]' if l.section else ''}"
@@ -170,6 +179,8 @@ def user_prompt(lines: list[LyricLine], band: GradeBand, types: list[VideoType],
             f"{step_seconds(band):.1f} s.\n"
             f"Avoid: {'; '.join(rules.avoid)}.\n\n"
             f"Allowed video types:\n{formats}\n\n"
+            + ("The lines marked [chorus] are the lines sung straight to the viewer: tag every [chorus] line "
+               "face_to_camera and no other line, however many there are.\n\n" if chorus else "")
             + (f"Teacher's brief: {brief}\n\n" if brief else "")
             + (f"{direction}\n\n" if direction else "")
             + f"Lyrics, one entry per line:\n{lyric}")

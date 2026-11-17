@@ -14,7 +14,8 @@ from src.schema.song.song_analysis_schema import LyricLine
 from src.service.intake.intake_jamwise import export_beside
 from src.service.lesson.lesson_prompt import (JAMWISE_SYSTEM, PROMPT_VERSION, SYSTEM, featured_terms,
                                               jamwise_direction, scene_ids, sequence_limit, user_prompt)
-from src.service.lesson.lesson_rules import MAX_SEQUENCES, allowed_types, clear_keywords, problems, scene_notes
+from src.service.lesson.lesson_rules import (MAX_SEQUENCES, allowed_types, chorus_lines, clear_keywords, problems,
+                                             scene_notes, sing_the_chorus)
 from src.service.llm.llm_service import LlmError, LlmService
 from src.service.stage.stage_common import add_llm_cost, fail_stage
 
@@ -45,6 +46,7 @@ class LessonService:
         export = self._jamwise(run)
         featured = featured_terms(export) if export else []
         most = sequence_limit(export) if export else MAX_SEQUENCES
+        chorus = chorus_lines(lines) if export else set()
         system = JAMWISE_SYSTEM if export else SYSTEM
         model = model or run.model_pins.get(StageName.LESSON) or self._settings.lesson_model
         prompt = user_prompt(lines, band, types, run.brief, jamwise_direction(export) if export else None)
@@ -62,7 +64,7 @@ class LessonService:
         state = self._runs.stage_states.update(state)
         try:
             draft, call = self._llm.parse(model, system, prompt, LessonDraft,
-                                          check=lambda d: problems(d, lines, band, types, featured, most))
+                                          check=lambda d: problems(d, lines, band, types, featured, most, bool(chorus)))
         except LlmError as exc:
             add_llm_cost(self._assets, run.id, StageName.LESSON, exc.call)
             fail_stage(self._runs, state, exc, logger, "lesson")
@@ -71,6 +73,8 @@ class LessonService:
             fail_stage(self._runs, state, exc, logger, "lesson")
             raise
         add_llm_cost(self._assets, run.id, StageName.LESSON, call)
+        if chorus:
+            sing_the_chorus(draft, chorus)
         unclear = {l.index for l in lines if l.unclear}
         for entry in draft.lines:                         # intake decides what is unclear, not the model
             if entry.index in unclear:

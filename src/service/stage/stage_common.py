@@ -84,7 +84,7 @@ def write_correction(llm: LlmService, model: str, log: logging.Logger, what: str
     """A short correction for the retry, from the failed prompt, the opening moment and the judge's
     findings; when none can be written the retry is drawn from the plain prompt."""
     try:
-        fix, call = llm.parse(model, CORRECTION, correction_request(prompt, brief.moment or "", findings), Correction,
+        fix, call = llm.parse(model, CORRECTION, correction_request(prompt, brief.moment or brief.description, findings), Correction,
                               check=check_correction, effort="low")
     except LlmError as exc:
         log.warning("%s %s: no correction, retrying the plain prompt: %s", what, shot_id, exc)

@@ -3,12 +3,16 @@ import math
 from src.schema.lesson.lesson_schema import LessonLine, LessonSequence, LineTag
 from src.schema.song.song_analysis_schema import LyricLine
 from src.schema.storyboard.storyboard_schema import ShotKind, Slot
+from src.service.lesson.lesson_rules import repeats
 
 # Lip-sync models take at most 10 s of video, so a sung shot is never longer.
 SUNG_MAX = 10.0
 # A cut moves to a beat this close to it.
 SNAP = 0.25
 MIN_SLOT = 0.5
+# A sung line timed this many times longer than the same line took earlier in the song is timed with the
+# music after it (a song's last line often is), so it ends when the earlier one would have.
+OVERLONG = 2.0
 
 _KIND = {LineTag.FACE_TO_CAMERA: ShotKind.SUNG, LineTag.NUMBER: ShotKind.NUMBER,
          LineTag.ILLUSTRATE: ShotKind.ILLUSTRATE, LineTag.UNCLEAR: ShotKind.UNCLEAR}
@@ -37,12 +41,18 @@ def _spans(lines: list[LyricLine], lesson: dict[int, LessonLine], beats: list[fl
     """One span per line, from its start to the next line's start. A gap without lyrics long enough for a
     shot of its own (intro, break, outro) becomes a music span; a shorter one joins the line before it."""
     spans = []
+    by_index, again = {l.index: l for l in lines}, repeats(lines)
     for i, line in enumerate(lines):
         start = _snap(line.start, beats, earlier_only=True)
         if i == 0 and start < low:                      # an intro too short for a shot joins the first line
             start = 0.0
         entry = lesson[line.index]
-        spans.append(_Span(start, line.end, [line.index], _KIND[entry.tag], entry.number_text,
+        end = line.end
+        if entry.tag == LineTag.FACE_TO_CAMERA and line.index in again:
+            first = by_index[again[line.index]]
+            if line.end - line.start > OVERLONG * (first.end - first.start):
+                end = line.start + first.end - first.start
+        spans.append(_Span(start, end, [line.index], _KIND[entry.tag], entry.number_text,
                            seq_of.get(line.index, 0), line.section))
     spans = _absorb_tiny(spans)
     joined = []

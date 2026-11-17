@@ -1,7 +1,12 @@
+from types import SimpleNamespace
+
 import numpy as np
 
 from src.schema.song.song_analysis_schema import LyricLine, TimedWord
-from src.service.assembly.captions import ACTIVE, BOX, SUNG, UPCOMING, caption_image, caption_states
+from src.schema.lesson.lesson_schema import KeyTerm, LessonLine, LessonPlan, LineTag
+from src.schema.storyboard.storyboard_schema import Position
+from src.service.assembly.assembly_service import keyword_pops, screen_words
+from src.service.assembly.captions import ACTIVE, BOX, INK, PLATE, SUNG, UPCOMING, caption_image, caption_states
 
 LINES = [LyricLine(index=0, text="The Sun shines", start=1.0, end=2.5, confidence=0.9),
          LyricLine(index=1, text="On us", start=4.0, end=5.0, confidence=0.9)]
@@ -13,7 +18,7 @@ WORDS = [TimedWord(index=0, line_index=0, text="The", start=1.0, end=1.4),
 
 
 def test_one_line_shows_while_sung_its_word_lit_and_nothing_between_lines():
-    states = [(round(a, 3), round(b, 3), line, lit) for a, b, line, lit, _ in
+    states = [(round(a, 3), round(b, 3), line, lit) for a, b, line, lit, *_ in
               caption_states(LINES, WORDS, offset=0.5, length=5.0)]
     assert states == [(0.0, 0.5, None, None), (0.5, 0.9, 0, 0), (0.9, 1.0, 0, None), (1.0, 1.4, 0, 1),
                       (1.4, 1.5, 0, None), (1.5, 2.0, 0, 2), (2.0, 3.5, None, None), (3.5, 3.9, 1, 3),
@@ -55,7 +60,7 @@ def test_a_long_line_wraps_inside_the_box_and_no_words_draw_nothing():
 def test_screen_words_show_for_their_whole_stretch_beside_the_captions():
     screen = [(1.2, 2.2, ("photosphere",), "right"), (4.0, 5.0, ("93 million miles", "core"), "left")]
     states = caption_states(LINES, WORDS, offset=0.0, length=5.0, screen=screen)
-    shown = {(round(a, 3), round(b, 3)): s for a, b, _, _, s in states if s}
+    shown = {(round(a, 3), round(b, 3)): s for a, b, _, _, s, _ in states if s}
     assert min(a for a, _ in shown) == 1.2 and max(b for _, b in shown) == 5.0
     assert all(s == screen[0] for (a, _), s in shown.items() if a < 2.2)
     assert all(s == screen[1] for (a, _), s in shown.items() if a >= 4.0)
@@ -69,3 +74,32 @@ def test_screen_words_are_drawn_in_the_open_third_and_stack():
     assert cols(one).min() > 1280 * 0.55 and cols(two).max() < 1280 * 0.45       # right third, then left third
     assert abs(rows(one).mean() - 720 * 0.42) < 20 and np.ptp(rows(two)) > 1.8 * np.ptp(rows(one))
     assert SUNG in {tuple(p) for p in one.reshape(-1, 4)}
+
+
+def lesson(*keywords) -> LessonPlan:
+    return LessonPlan(topic="t", subject="s", summary="s", video_type="concept", type_reason="r", must_not_teach=[],
+                      key_terms=[KeyTerm(term="Sun", definition="our star")], grade_band="3-5", model="m",
+                      prompt_version="v", lines=[LessonLine(index=i, teaches="t", show="s", tag=LineTag.ILLUSTRATE,
+                                                            keyword=k) for i, k in enumerate(keywords)])
+
+
+def test_a_key_word_pops_up_on_its_plate_when_it_is_sung_and_takes_the_place_of_shot_labels():
+    shots = [SimpleNamespace(start=0.0, end=3.0, position=Position.LEFT_THIRD, label="core", number_text="93"),
+             SimpleNamespace(start=3.0, end=5.0, position=Position.CENTRE, label=None, number_text=None)]
+    pops = keyword_pops(lesson("sun", "us"), WORDS, shots)
+    assert pops == [(1.5, 3.5, "Sun", "right"), (4.5, 6.5, "us", "centre")]       # as sung, spelled as its key term
+    assert screen_words(shots, labels=not pops) == [(0.0, 3.0, ("93",), "right")]  # the figure stays, the label goes
+    states = caption_states(LINES, WORDS, offset=0.0, length=5.0, pops=pops)
+    seen = [(round(a, 3), pop) for a, _, _, _, _, pop in states if pop]
+    assert seen[0][0] == 1.5 and seen[0][1][2] < 0.2 and ("Sun", "right", 1.0) in [p for _, p in seen]
+    pixels = np.array(caption_image([], None, 1280, 720, pop=("Sun", "right", 1.0)))
+    rows, cols = np.where(pixels[:, :, 3] > 0)
+    assert abs(rows.mean() - 720 * 0.13) < 12 and abs(cols.mean() - 1280 * 0.78) < 12
+    assert {INK, PLATE} <= {tuple(p) for p in pixels.reshape(-1, 4)}
+
+
+def test_a_film_whose_lesson_has_no_key_words_is_drawn_as_before():
+    shots = [SimpleNamespace(start=0.0, end=3.0, position=Position.LEFT_THIRD, label="core", number_text=None)]
+    assert keyword_pops(lesson(None, None), WORDS, shots) == [] and keyword_pops(None, WORDS, shots) == []
+    assert screen_words(shots) == [(0.0, 3.0, ("core",), "right")]
+    assert all(pop is None for *_, pop in caption_states(LINES, WORDS, offset=0.0, length=5.0))

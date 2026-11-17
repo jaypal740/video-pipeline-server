@@ -5,7 +5,7 @@ from src.schema.storyboard.storyboard_schema import (BoardHeader, CastMember, Sh
 from src.service.storyboard.storyboard_rules import HOST, LIMITS
 
 # Bumped whenever the prompt changes, so every run is boarded again with the new prompt.
-PROMPT_VERSION = "storyboard.v11"
+PROMPT_VERSION = "storyboard.v17"
 
 # The sentences that differ between a video with our fixed host and a song that comes with its own
 # characters (JamWise), whose lead takes the host's place: (host wording, characters wording).
@@ -13,8 +13,10 @@ _KINDS = ("kind person or thing",
           "kind person, character (an animal or thing the song's plan gives a face) or thing")
 _GIVEN = ("The host and the host's place are given; never declare them.",
           "The song's characters are given with the looks its plan describes: declare each one in cast with that "
-          "look, cut to the words that make it recognisable. Set star true on the lead, who sings to camera. A "
-          "character that changes form is one cast member per form, each with star true if it is the lead.")
+          "look, cut to the words that make it recognisable. A character that changes form is one cast member per "
+          "form. Declare the song's singer too, made for this song alone: id singer, kind person, star true, scale "
+          "human; look: a girl of about ten, her skin, hair and clothes, with clothes in the lead character's "
+          "colours. She is seen only in sung shots.")
 _OUTFIT = (f"- host_outfit, on every place where the host appears: what the host wears there, fitting that place "
            "and the topic (beach clothes on a beach, a lab coat in a lab, a coat on a ship's deck), at most "
            f"{LIMITS['outfit']} words of clothes and colours. Name one of the wardrobe kits you are given, or write "
@@ -25,7 +27,7 @@ _CHARACTERS = ("Only people are characters. Cells, germs, molecules, animals, ob
                "lesson says, but their bodies, life stages and what they do stay true to the real thing. Cells, "
                "germs, molecules, other animals, objects and ideas look and behave as they really do: never faces, "
                "eyes or expressions on them, no other mascots.")
-_SINGER = ("the host", "the lead")
+_SINGER = ("the host", "the singer")
 _FOLLOW = ("Follow the lesson's idea for each line; change it only when continuity needs it, and keep what it "
            "teaches.",
            "The picture slots of a sequence are cut by time, not by line: spread the sequence's steps over them in "
@@ -41,8 +43,23 @@ _OPENS = ("", " opens: one or two plain sentences on how things stand when the s
           "unbroken story: what one sequence leaves is what the next opens with.")
 _SUNG = ("In a sung shot the host sings to camera inside one of this video's walkable places, in the chosen outfit; "
          "declare a fitting walkable place if none exists.",
-         "In a sung shot the lead sings to camera, in the form it has at that point of the story and in a place of "
-         "its sequence; list it first in subjects.")
+         "In a sung shot the singer sings to camera at the side of the frame while what her line names is filmed "
+         "behind her as it really looks. A line that names one thing shows that thing doing what the line says. A "
+         "line that names several things shows them in the order they are sung, the first giving way to the next. "
+         "A line that names the whole idea and no single thing shows the moment that best sums the idea up. Sung "
+         "shots that follow each other each show a different thing or a different moment, so the lines of a chorus "
+         "never share one picture. When a chorus is sung again, each line still shows what it names, at a new "
+         "moment or from a new distance. A sung shot stands outside the story the picture shots tell. It is its "
+         "own piece of real footage of what the line names, at the point in that thing's life the line is about, "
+         "whatever the picture shots before and after it show, and it does not carry on from the shot before it. "
+         "The thing the line names is itself in the shot, whole and as the main subject; what it leaves behind, "
+         "such as an empty shell or a shed skin, never stands for it. Something visibly happens to it in the shot. "
+         "Describe real things by what is seen: no character names, and no face, smile or expression on any animal "
+         "or thing. A sung shot shows one change that fits its few seconds, never a time-lapse of several stages. "
+         "The singer is never in the picture and is never mentioned in start_state, action or end_state: our code "
+         "adds her. List the singer first in subjects, then the main thing shown, in a place "
+         "of its sequence, and write start_state, action and end_state about what is filmed alone, as real footage "
+         "would show it.")
 
 
 def _system(kinds: str, given: str, outfit: str, characters: str, singer: str, follow: str, sung: str,
@@ -56,11 +73,14 @@ First declare, once for the whole video:
 - shape: one sentence on how the video moves from start to end, at most {LIMITS["shape"]} words.
 - cast: every person or thing seen in more than one shot. id in snake_case starting with a letter, unique \
 across cast and places; {kinds}; look: \
-the fixed appearance in at most {LIMITS["cast look"]} words (colours, materials, shapes, clothes); size: its \
+the fixed appearance in at most {LIMITS["cast look"]} words (colours, materials, shapes, clothes), opening \
+with the plain word for what it is (a leaf, a ship) and describing it on its own, with no character's name, \
+no other cast member and not where it sits; size: its \
 real size in at most {LIMITS["size"]} words; scale: the rung it is seen at (cosmic, planet, landscape, human, \
 object, microscopic, molecular). A thing that is replaced by a new one (a second cable, a new ship) is a new \
 cast member with its own id. {given}
-- places: id, look in at most {LIMITS["place look"]} words, lighting in at most {LIMITS["lighting"]} words, \
+- places: id, look in at most {LIMITS["place look"]} words that call things by what they are, never by a \
+character's name, lighting in at most {LIMITS["lighting"]} words, \
 scale (cosmic, planet, landscape, human, object, microscopic, molecular) and walkable: true when a person \
 could really stand there (a deck, a shore, a lab), false for space, underwater, inside a cell.
 {outfit}- motifs: visual codes kept all video, e.g. thing "antibiotic", rule "always a cyan liquid", the rule in at \
@@ -112,6 +132,8 @@ stages), keep one view and give each part its own labelled shot as it is sung.
 truck along with it, so no shot reads as a still.
 - A slow change (frost spreading, a plant growing or wilting, the Sun turning) is a time-lapse: its \
 end_state is clearly different from its start_state across the whole frame.
+- The music shots before the first line lead to what the first line names: the first opens on the place, \
+and every one of them ends with that thing in view.
 - A chorus sung again gets new shots: keep the chorus's place and look, move its idea further, and never \
 repeat an earlier shot.
 - {characters}
@@ -178,8 +200,8 @@ def user_prompt(plan: LessonPlan, lines: list[LyricLine], slots: list[Slot], ban
     """The whole film, given to every call: the lesson, the rules, every sequence and every slot. sung: the
     words sung during each slot, so a line split across shots shows each shot its own words. characters: the
     song's own characters, given in place of the host."""
-    who = (f"The song's characters, from its plan (where a rule above says host, that is the lead):\n{characters}\n"
-           "The lead acts in the scenes the lesson puts it in and sings to camera in sung shots."
+    who = (f"The song's characters, from its plan (where a rule above says host, that is the song's singer):\n{characters}\n"
+           "The lead acts in the scenes the lesson puts it in; the song's singer sings the sung shots."
            if characters else
            f"Host ({HOST}): {host.look} Size: {host.size}. Wardrobe kits: "
            + "; ".join(f"{kit}: {outfit}" for kit, outfit in wardrobe.items())

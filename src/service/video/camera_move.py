@@ -28,3 +28,13 @@ def move_filter(shot: Shot, frames: int, width: int, height: int, fps: int) -> s
     return (f"scale={width * UPSCALE}:{height * UPSCALE}:force_original_aspect_ratio=increase,"
             f"crop={width * UPSCALE}:{height * UPSCALE},"
             f"zoompan=z='{zoom}':x='{x}':y='{y}':d={frames}:s={width}x{height}:fps={fps},setsar=1,format=yuv420p")
+
+
+def dissolve_filter(frames: int, width: int, height: int, fps: int) -> str:
+    """The ffmpeg filter that turns a shot's opening and ending pictures into `frames` frames: a slow push in
+    that dissolves from the first picture to the second through the middle of the shot."""
+    seconds, big = frames / fps, f"{width * UPSCALE}:{height * UPSCALE}"
+    fit = f"scale={big}:force_original_aspect_ratio=increase,crop={big},setsar=1"
+    return (f"[0:v]{fit}[a];[1:v]{fit}[b];[a][b]xfade=transition=fade:duration={seconds * 0.4:.3f}:"
+            f"offset={seconds * 0.3:.3f},zoompan=z='1+{TRAVEL[Speed.SLOW]}*(on/{max(frames - 1, 1)})':"
+            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={width}x{height}:fps={fps},format=yuv420p")
