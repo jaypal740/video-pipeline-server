@@ -11,6 +11,8 @@ from src.service.assembly.assembly_service import AssemblyService
 from src.service.auth.auth_service import AuthService
 from src.service.image.fal_image_service import FalImageService
 from src.service.image.image_check_service import ImageCheckService
+from src.service.two_d.lesson.beat_lesson_service import BeatLessonService
+from src.service.two_d.script.script_service import ScriptService
 from src.service.video.clip_checks import ClipCheckService
 from src.service.video.fal_video_service import FalVideoService
 from src.service.video.video_service import VideoService
@@ -98,6 +100,23 @@ class Container(containers.DeclarativeContainer):
     )
     storyboard_service = providers.Singleton(
         StoryboardService,
+        run_repository=run_repository,
+        song_repository=song_repository,
+        asset_repository=asset_repository,
+        llm=llm_service,
+        settings=settings,
+    )
+    # 2d films (src/service/two_d)
+    beat_lesson_service = providers.Singleton(
+        BeatLessonService,
+        run_repository=run_repository,
+        song_repository=song_repository,
+        asset_repository=asset_repository,
+        llm=llm_service,
+        settings=settings,
+    )
+    script_service = providers.Singleton(
+        ScriptService,
         run_repository=run_repository,
         song_repository=song_repository,
         asset_repository=asset_repository,
