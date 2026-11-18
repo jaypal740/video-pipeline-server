@@ -20,6 +20,7 @@ from src.schema.song.song_analysis_schema import TimedWord
 from src.schema.storyboard.storyboard_schema import Position, Shot, ShotKind, Storyboard, Transition
 from src.service.assembly.captions import KEYWORD_SECONDS, Pop, Screen, caption_track, sung_at
 from src.service.local.ffmpeg_service import FfmpegService
+from src.service.stage.stage_common import storyboard_of
 from src.service.storage.storage_service import Storage
 from src.service.storyboard.storyboard_rules import real_shots
 
@@ -267,10 +268,7 @@ class AssemblyService:
     # --- inputs -------------------------------------------------------------------------------------------
 
     def _board(self, run_id: str) -> Storyboard:
-        state = self._runs.stage(run_id, StageName.STORYBOARD)
-        if state is None or state.status != StageStatus.DONE:
-            raise ValueError(f"Run {run_id} has no storyboard; run the storyboard stage first")
-        return Storyboard(**state.output)
+        return storyboard_of(self._runs, run_id)
 
     def _lesson(self, run_id: str) -> LessonPlan | None:
         state = self._runs.stage(run_id, StageName.LESSON)

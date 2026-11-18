@@ -7,7 +7,7 @@ from src.repository.asset.asset_repository import AssetRepository
 from src.repository.run.run_repository import RunRepository
 from src.repository.song.song_repository import SongRepository
 from src.schema.base_schema import utcnow
-from src.schema.enums import StageName, StageStatus
+from src.schema.enums import FilmType, StageName, StageStatus
 from src.schema.lesson.lesson_schema import BandRules, FormatRules, LessonPlan
 from src.schema.run.run_schema import Run
 from src.schema.run.stage_state_schema import StageState
@@ -19,7 +19,7 @@ from src.schema.storyboard.storyboard_schema import (BoardHeader, CastKind, Cast
 from src.service.intake.intake_jamwise import export_beside
 from src.service.lesson.lesson_rules import band_rules, format_rules
 from src.service.llm.llm_service import LlmCall, LlmError, LlmService
-from src.service.stage.stage_common import add_llm_cost, fail_stage
+from src.service.stage.stage_common import REALISTIC, add_llm_cost, fail_stage, require_film_type
 from src.service.storyboard.storyboard_prompt import (PROMPT_VERSION, REVIEW_SYSTEM, STAR_SYSTEM, SYSTEM,
                                                       WATCH_SYSTEM, header_prompt, review_prompt,
                                                       rewrite_note, sequence_prompt, user_prompt, watch_prompt)
@@ -56,10 +56,12 @@ class StoryboardService:
 
     def run(self, run_id: str, model: str | None = None, force: bool = False) -> Storyboard:
         run = self._run(run_id)
+        require_film_type(self._runs, run.id, REALISTIC)
         plan = self._plan(run)
         analysis = self._analysis(run)
         band, fmt = band_rules(plan.grade_band), format_rules(plan.video_type)
-        export = export_beside(self._songs.songs.get(run.song_id).audio_path)
+        export = (None if plan.film_type == FilmType.NARRATION      # a narration film has the grade's host
+                  else export_beside(self._songs.songs.get(run.song_id).audio_path))
         # A JamWise song has its own singer, made for it: she is the star, and our host is not used.
         host, wardrobe = (None if export else host_for(plan.grade_band)), wardrobe_for(plan.grade_band)
         system = STAR_SYSTEM if export else SYSTEM

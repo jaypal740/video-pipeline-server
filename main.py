@@ -6,7 +6,7 @@ import uvicorn
 from src.core.container import Container
 from src.core.logging import configure_logging
 from src.core.database import create_tables
-from src.schema.enums import StageName
+from src.schema.enums import FilmType, StageName
 from src.schema.lesson.lesson_schema import GradeBand, VideoType
 from src.schema.run.run_schema import Run
 from src.schema.song.song_schema import SongStatus
@@ -143,11 +143,15 @@ def run_lesson(
     run_id: str,
     model: str | None = typer.Option(None, "--model", help="Override the lesson model."),
     video_type: VideoType | None = typer.Option(None, "--type", help="Ask for this video type."),
+    film_type: FilmType | None = typer.Option(None, "--film", help="narration or music_video; default: music_video "
+                                              "for a JamWise song, else narration. 2d films use `run 2d lesson`."),
     force: bool = typer.Option(False, "--force", help="Plan again even if nothing changed."),
 ) -> None:
     """Stage 2: what each line teaches and shows, and the video type for the run's grade band."""
-    plan = container.lesson_service().run(run_id, model=model, video_type=video_type, force=force)
-    typer.echo(f"{plan.topic} ({plan.subject}), grades {plan.grade_band}: {plan.video_type}. {plan.type_reason}")
+    plan = container.lesson_service().run(run_id, model=model, video_type=video_type, film_type=film_type,
+                                          force=force)
+    typer.echo(f"{plan.topic} ({plan.subject}), grades {plan.grade_band}, {plan.film_type}: {plan.video_type}. "
+               f"{plan.type_reason}")
     typer.echo(f"terms: {', '.join(t.term for t in plan.key_terms)}")
     for line in plan.lines:
         typer.echo(f"  {line.index:3d}  {line.tag:14s}  {line.show[:90]}")

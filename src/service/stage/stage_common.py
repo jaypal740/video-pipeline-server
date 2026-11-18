@@ -7,7 +7,7 @@ from src.repository.run.run_repository import RunRepository
 from src.schema.asset.asset_schema import Asset, ReviewState
 from src.schema.asset.cost_entry_schema import CostEntry
 from src.schema.base_schema import utcnow
-from src.schema.enums import StageName, StageStatus
+from src.schema.enums import FilmType, StageName, StageStatus
 from src.schema.image.image_check_schema import Brief, Correction
 from src.schema.run.stage_state_schema import StageState
 from src.schema.storyboard.storyboard_schema import Storyboard
@@ -21,9 +21,35 @@ URL_SECONDS = 3600
 PASSED = (ReviewState.PASSED, ReviewState.APPROVED)          # a try that met the bar; USABLE adds used_best
 # The stop-loss looks at the first this-many finished shots.
 STOP_LOSS_AFTER = 8
+# The film types the realistic stages make; 2d films have their own stages under two_d.
+REALISTIC = frozenset({FilmType.NARRATION, FilmType.MUSIC_VIDEO})
+
+
+def film_type_of(runs: RunRepository, run_id: str) -> FilmType | None:
+    """The run's film type, from its lesson: a 2d lesson has beats, a realistic one says its type. None when
+    there is no lesson yet, or a realistic lesson stored before film types existed."""
+    state = runs.stage(run_id, StageName.LESSON)
+    output = state.output if state is not None else {}
+    if "beats" in output:
+        return FilmType.TWO_D
+    return FilmType(output["film_type"]) if output.get("film_type") else None
+
+
+def require_film_type(runs: RunRepository, run_id: str, allowed: frozenset[FilmType]) -> None:
+    """Stops a stage before it spends anything on a run of a film type it does not make. A run with no lesson
+    yet is accepted by any stage; its lesson then fixes its type."""
+    state = runs.stage(run_id, StageName.LESSON)
+    if state is None or not state.output:
+        return
+    found = film_type_of(runs, run_id)
+    if found in allowed or (found is None and allowed == REALISTIC):
+        return
+    hint = "run 2d <stage>" if found == FilmType.TWO_D else "run <stage>"
+    raise ValueError(f"run {run_id[:8]} is a {found or 'realistic'} film; use `{hint}`")
 
 
 def storyboard_of(runs: RunRepository, run_id: str) -> Storyboard:
+    require_film_type(runs, run_id, REALISTIC)
     state = runs.stage(run_id, StageName.STORYBOARD)
     if state is None or state.status != StageStatus.DONE:
         raise ValueError(f"Run {run_id} has no storyboard; run the storyboard stage first")

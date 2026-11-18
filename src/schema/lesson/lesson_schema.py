@@ -2,6 +2,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from src.schema.enums import FilmType
+
 
 class GradeBand(StrEnum):
     K_2 = "k-2"
@@ -117,8 +119,10 @@ class LessonDraft(BaseModel):
 
 
 class LessonPlan(LessonDraft):
-    """Stage 2 output: the draft once code has checked it, with what it was made from."""
+    """Stage 2 output: the draft once code has checked it, with what it was made from. film_type is None only
+    on plans stored before film types existed."""
 
     grade_band: GradeBand
+    film_type: FilmType | None = None
     model: str
     prompt_version: str

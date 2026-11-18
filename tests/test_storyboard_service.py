@@ -1,8 +1,10 @@
+import json
+
 import pytest
 from dependency_injector import providers
 
 from src.core.container import Container
-from src.schema.enums import StageName, StageStatus
+from src.schema.enums import FilmType, StageName, StageStatus
 from src.schema.lesson.lesson_schema import GradeBand, LessonLine, LessonPlan, LessonSequence, LineTag, VideoType
 from src.schema.run.run_schema import Run
 from src.schema.run.stage_state_schema import StageState
@@ -309,3 +311,27 @@ def test_a_shot_at_night_needs_the_place_lit_for_night_declared_under_times(cont
     assert "also at other hours in dish_night" in claude.prompts[1]
     assert "s03: the shot opens at night but 'dish' is lit 'soft daylight'" in claude.prompts[2]
     assert [s.place for s in result.shots] == ["dish", "dish", "dish_night"]
+
+
+def test_a_narration_film_of_a_jamwise_song_uses_the_host(container, run, tmp_path):
+    (tmp_path / "jamwise.json").write_text(json.dumps({"result": {"lyrics": "x", "lineTiming": [{}]}}))
+    songs, runs = container.song_repository(), container.run_repository()
+    song = songs.songs.get(run.song_id)
+    song.audio_path = str(tmp_path / "a.mp3")
+    songs.songs.update(song)
+    state = runs.stage(run.id, StageName.LESSON)
+    state.output = {**state.output, "film_type": FilmType.NARRATION}
+    runs.stage_states.update(state)
+    result = storyboard(container, FakeClaude(header(), sequence(), *sound_off())).run(run.id)
+    assert result.cast[0].id == "host"
+
+
+def test_a_2d_run_is_refused_before_any_call(container, run):
+    runs = container.run_repository()
+    state = runs.stage(run.id, StageName.LESSON)
+    state.output = {"beats": []}
+    runs.stage_states.update(state)
+    claude = FakeClaude()
+    with pytest.raises(ValueError, match="is a 2d film"):
+        storyboard(container, claude).run(run.id)
+    assert claude.prompts == []

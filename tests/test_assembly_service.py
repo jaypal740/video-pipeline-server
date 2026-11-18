@@ -255,3 +255,12 @@ def test_a_singer_who_stands_at_the_side_of_her_clip_is_not_cut_off_by_the_films
     frame = np.frombuffer(raw, dtype=np.uint8).reshape(90, 160, 3).astype(int)
     red = (frame[..., 0] > 180) & (frame[..., 1] < 90)
     assert red.sum() > 550 and not red[:, 0].any()         # all of her 18 x 45 figure, clear of the edge
+
+
+def test_a_2d_run_is_refused(stage, container):
+    service, storage, song, tmp_path = stage
+    run, _ = assembled_run(container, storage, song, tmp_path)
+    container.run_repository().stage_states.add(StageState(run_id=run.id, stage=StageName.LESSON,
+                                                           status=StageStatus.DONE, output={"beats": []}))
+    with pytest.raises(ValueError, match="is a 2d film"):
+        service.run(run.id)
