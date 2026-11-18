@@ -28,14 +28,14 @@ class AnthropicService:
         return self._parse(model, system, [{"role": "user", "content": user}], output_type, effort)
 
     def inspect(self, model: str, system: str, user: str, images: list[LabelledImage],
-                output_type: type[BaseModel]) -> ProviderReply:
+                output_type: type[BaseModel], effort: str) -> ProviderReply:
         content = []
         for i, image in enumerate(images, start=1):
             content.append({"type": "text", "text": f"Image {i}: {image.label}"})
             content.append({"type": "image", "source": {"type": "base64", "media_type": image.media_type,
                                                         "data": base64.b64encode(image.data).decode()}})
         content.append({"type": "text", "text": user})
-        return self._parse(model, system, [{"role": "user", "content": content}], output_type, "low")
+        return self._parse(model, system, [{"role": "user", "content": content}], output_type, effort)
 
     def _parse(self, model: str, system: str, messages: list, output_type: type[BaseModel], effort: str) -> ProviderReply:
         schema = {"type": "json_schema", "schema": anthropic.transform_schema(output_type.model_json_schema())}

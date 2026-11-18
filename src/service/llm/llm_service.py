@@ -58,7 +58,7 @@ class LlmProvider(Protocol):
     def parse(self, model: str, system: str, user: str, output_type: type[BaseModel], effort: str) -> ProviderReply: ...
 
     def inspect(self, model: str, system: str, user: str, images: list[LabelledImage],
-                output_type: type[BaseModel]) -> ProviderReply: ...
+                output_type: type[BaseModel], effort: str) -> ProviderReply: ...
 
 
 class LlmService:
@@ -100,13 +100,13 @@ class LlmService:
                        reply.output if reply else None, problems)
 
     def inspect(self, model: str, system: str, user: str, images: list[LabelledImage],
-                output_type: type[T]) -> tuple[T, LlmCall]:
+                output_type: type[T], effort: str = "low") -> tuple[T, LlmCall]:
         """One vision call: the model reads the labelled images and answers in the given shape."""
         price_of(model)
         provider = self._anthropic if model.startswith("claude-") else self._openai
         call = LlmCall(provider=provider.name, model=model, attempts=1)
         try:
-            reply = provider.inspect(model, system, user, images, output_type)
+            reply = provider.inspect(model, system, user, images, output_type, effort)
         except LlmRefusal as exc:
             raise LlmError(f"{model} refused: {exc}", call) from exc
         call.input_tokens, call.output_tokens, call.cost_usd = reply.input_tokens, reply.output_tokens, reply.cost_usd

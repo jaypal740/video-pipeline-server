@@ -1,6 +1,8 @@
 import json
 import re
 import subprocess
+import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +64,26 @@ class FfmpegService:
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg failed: {result.stderr.decode(errors='replace')[-400:]}")
         return result.stdout
+
+    def feed(self, args: list[str], frames: Iterable[bytes]) -> None:
+        """An ffmpeg call whose input `-` is these raw frames, written to it one at a time, so a film's
+        frames never sit in memory or on disk together."""
+        with tempfile.TemporaryFile() as log:
+            process = subprocess.Popen(["ffmpeg", "-v", "error", "-y", *args], stdin=subprocess.PIPE,
+                                       stdout=subprocess.DEVNULL, stderr=log)
+            try:
+                for frame in frames:
+                    process.stdin.write(frame)
+                process.stdin.close()
+                code = process.wait(timeout=self._timeout_s)
+            except BrokenPipeError:                             # ffmpeg stopped reading: its log says why
+                code = process.wait(timeout=self._timeout_s)
+            except BaseException:
+                process.kill()
+                raise
+            if code != 0:
+                log.seek(0)
+                raise RuntimeError(f"ffmpeg failed: {log.read().decode(errors='replace')[-400:]}")
 
     def _exec(self, command: list[str], text: bool = False) -> subprocess.CompletedProcess:
         try:

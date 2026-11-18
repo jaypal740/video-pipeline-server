@@ -60,3 +60,20 @@ def test_an_unpriced_model_is_refused_before_any_call():
     with pytest.raises(ValueError, match="No price"):
         llm.parse("gpt-unknown", "s", "u", Answer)
     assert llm._openai.prompts == []
+
+
+class InspectProvider(FakeProvider):
+    def __init__(self, name):
+        super().__init__(name, [])
+        self.efforts = []
+
+    def inspect(self, model, system, user, images, output_type, effort):
+        self.efforts.append(effort)
+        return ProviderReply(output=output_type(value=1), model=model, input_tokens=10, output_tokens=1, cost_usd=0.001)
+
+
+def test_inspect_passes_effort():
+    llm = LlmService(openai=FakeProvider("openai", []), anthropic=InspectProvider("anthropic"))
+    llm.inspect("claude-opus-5-5", "s", "u", [], Answer, effort="high")
+    llm.inspect("claude-opus-5-5", "s", "u", [], Answer)
+    assert llm._anthropic.efforts == ["high", "low"]
