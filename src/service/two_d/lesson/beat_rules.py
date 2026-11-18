@@ -4,7 +4,9 @@ from difflib import SequenceMatcher
 from src.schema.lesson.lesson_schema import GradeBand
 from src.schema.two_d.beat_schema import Beat, BeatDraft, BeatLessonDraft, BeatType
 from src.schema.song.song_analysis_schema import LyricLine, TimedWord
-from src.service.lesson.lesson_rules import _WORD, MAX_KEYWORD_WORDS, REPEAT_SIMILAR, _words, band_rules
+from src.service.assembly.captions import sung_at
+from src.service.lesson.lesson_rules import MAX_KEYWORD_WORDS, REPEAT_SIMILAR, _words, band_rules
+from src.service.storyboard.storyboard_rules import _plain
 
 # What a section tag adds to its kind: [Final Chorus] and [Chorus x2] are the chorus.
 _SECTION_EXTRA = re.compile(r"^(?:final|last)\s+|\s+x\d*$")
@@ -46,10 +48,6 @@ def repeats(lines: list[LyricLine]) -> dict[int, int]:
     return found
 
 
-def _plain(text: str) -> str:
-    return " " + " ".join(_WORD.findall(text.lower())) + " "
-
-
 def beat_times(beats: list[BeatDraft], lines: list[LyricLine], duration: float) -> list[tuple[float, float]]:
     """Each beat's (start, end) from its lines' timing. A beat runs to the next beat's start, and the first
     and last reach the song's ends, unless the stretch without lyrics there is long enough for a music beat."""
@@ -63,16 +61,6 @@ def beat_times(beats: list[BeatDraft], lines: list[LyricLine], duration: float) 
         until = starts[i + 1] if i + 1 < len(beats) else duration
         times.append((round(start, 3), round(until if until - end < MIN_MUSIC_SECONDS else end, 3)))
     return times
-
-
-def sung_at(keyword: str, words: list[TimedWord]) -> float | None:
-    """When the key word starts being sung: the start of the first timed word that begins it."""
-    want = _WORD.findall(keyword.lower())
-    tokens = [(token, w.start) for w in words for token in _WORD.findall(w.text.lower())]
-    for i in range(len(tokens) - len(want) + 1):
-        if [token for token, _ in tokens[i:i + len(want)]] == want:
-            return tokens[i][1]
-    return None
 
 
 def timed_beats(beats: list[BeatDraft], lines: list[LyricLine], words: list[TimedWord], duration: float) -> list[Beat]:

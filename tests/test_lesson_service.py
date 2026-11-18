@@ -170,3 +170,10 @@ def test_realistic_lesson_refuses_2d_run(container, run):
 def test_lesson_refuses_2d_type(container, run):
     with pytest.raises(ValueError, match="run 2d lesson"):
         lesson(container, FakeClaude(draft())).run(run.id, film_type=FilmType.TWO_D)
+
+
+def test_lesson_refuses_music_video_for_a_song_without_jamwise(container, run):
+    claude = FakeClaude(draft())
+    with pytest.raises(ValueError, match="music_video needs a JamWise song"):
+        lesson(container, claude).run(run.id, film_type=FilmType.MUSIC_VIDEO)
+    assert claude.calls == 0

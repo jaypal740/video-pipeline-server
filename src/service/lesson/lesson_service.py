@@ -49,6 +49,8 @@ class LessonService:
                      or (FilmType.MUSIC_VIDEO if export else FilmType.NARRATION))
         if film_type not in REALISTIC:
             raise ValueError(f"A {film_type} film's lesson is made with `run 2d lesson`")
+        if film_type == FilmType.MUSIC_VIDEO and export is None:
+            raise ValueError(f"Run {run.id[:8]}: music_video needs a JamWise song; this song has no JamWise export")
         if film_type == FilmType.NARRATION:
             export = None                                 # a narration film follows its lyrics, not a JamWise plan
         featured = featured_terms(export) if export else []
