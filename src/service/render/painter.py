@@ -45,6 +45,8 @@ class Painter:
             self._lay(canvas, picture, x, y, item.opacity)
             if item.name:                                                   # just under its subject
                 name = self._word(item.name, NAME_PX)
+                if name.width > side:                                       # no wider than its stage, so names in a row stay apart
+                    name = name.resize((side, max(2, round(name.height * side / name.width))), Image.BILINEAR)
                 self._lay(canvas, name, x, y + side * BODY / 2 + name.height / 2, item.opacity)
         for text, x, y, popped in frame.words:
             plate = self._word(text)

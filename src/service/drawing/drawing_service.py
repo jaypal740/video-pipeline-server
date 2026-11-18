@@ -151,7 +151,7 @@ class DrawingService:
                        cut=cut, problems=problems, notes=problems)
             if not problems:                                    # a picture that is no cut-out needs no judge
                 checklist, made.check = self._check.check(reply.data, labelled, brief)
-                made.problems, made.notes = self._check.problems(checklist, brief), self._check.notes(checklist)
+                made.problems, made.notes = self._check.problems(checklist, brief), self._check.notes(checklist, brief)
                 made.score = checklist.score
             tries.append(made)
             if not made.problems:

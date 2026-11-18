@@ -17,7 +17,7 @@ FACE_SHOWS = "The character's face and mouth are clearly visible"
 SAME_ONE = "The subject is the same one as in the reference picture, drawn in the same style and colours"
 NO_FACE = "No cartoon face is added: no eyes or mouth drawn onto a thing that has none in real life"
 TRUE = ("What is drawn is true to the real thing the description names, as the song teaches it here: its parts, shape "
-        "and colours are the ones that thing really has (no caterpillar's body on a butterfly), and no wrong idea is "
+        "and colours are the ones that thing really has (no part of another thing, or of another form of it, mixed in), and no wrong idea is "
         "shown. This drawing is one piece of the picture on screen and other drawings show the rest, so it need not "
         "show everything the song teaches here")
 ONLY = ("The picture shows only what the description names: nothing is added under, behind or beside the subject "

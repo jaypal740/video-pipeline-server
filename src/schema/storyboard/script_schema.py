@@ -20,7 +20,7 @@ class Drawing(BaseModel):
     """One picture, drawn once as a flat cut-out and reused in every beat that names it. look: what to draw;
     of: the drawing this is another pose or state of, so both are drawn as the same thing; motion: how it
     moves in its short loop (a bird's wings flap), None when it holds still; sings: a performer drawing
-    whose face and mouth show, so it can be lip-synced; name: the stage it stands for (larva), which code
+    whose face and mouth show, so it can be lip-synced; name: the stage it stands for, which code
     writes under it in a row or ring."""
 
     id: str

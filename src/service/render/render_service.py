@@ -54,7 +54,9 @@ class RenderService:
         beats = [b for b in board.beats if until is None or b.start < until]
         width, height, fps = self._settings.assembly_width, self._settings.assembly_height, self._settings.assembly_fps
         scenes = scenes_of(board, beats, width / height)
-        moving = {d.id for d in board.drawings if d.motion}
+        looping = self._runs.stage(run_id, StageName.LOOPS)
+        held = set(((looping.output or {}) if looping else {}).get("still", []))      # no loop fit to use: held still
+        moving = {d.id for d in board.drawings if d.motion} - held
         shown = sorted({t.drawing for s in scenes for t in s.tracks})
         drawn, looped = self._chosen(run_id, StageName.VISUAL_IDENTITY, "drawings"), self._chosen(run_id, StageName.LOOPS, "loops")
         backs, stills, loops = ({name: drawn.get(name) for name in sorted({s.background for s in scenes})},

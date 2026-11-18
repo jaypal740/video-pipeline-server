@@ -78,7 +78,7 @@ def test_the_stages_of_a_process_line_up_in_a_row_several_performer_drawings_amo
     assert any("row is taken by leaf" in p for p in problems([act("show", 10.0, "leaf", pos="left"), stages[0]]))
     assert any("joins the row with show" in p for p in problems([act("show", 10.0, "leaf", pos="top"),
                                                                  act("move", 11.0, "leaf", pos="row", until=12.0)]))
-    full = Screen(background="meadow", on={d: "row" for d in ("egg", "leaf", "twig", "arrow", "pip")})
+    full = Screen(background="meadow", on={d: "row" for d in ("egg", "leaf", "twig", "arrow", "pip", "pip_point")})
     assert any("the row is full" in p for p in problems([act("show", 10.0, "caterpillar", pos="row")], before=full))
 
 
@@ -89,14 +89,16 @@ def test_the_stages_of_a_cycle_go_round_a_ring_whose_middle_is_for_a_singer_who_
     assert found == [] and screens[0].sung == [("pip", 10.0, 14.0)] and screens[0].on["twig"] == "ring"
     stages[0] = act("show", 10.0, "pip_point", pos="ring")
     twice = problems(stages, beat(type="hero"))             # the performer is a stage: no second drawing of it in the middle
-    assert len(twice) == 1 and "pip_point is on screen; the performer is one drawing at a time" in twice[0]
-    assert problems(stages[:1] + stages[2:], beat(type="hero")) == []                     # the stages alone
+    assert "pip_point is on screen; the performer is one drawing at a time" in twice[0] and "no drawing sings" in twice[1]
+    assert problems(stages[:1] + stages[2:]) == []                                        # the stages alone
+    silent = problems(stages[:1] + stages[2:], beat(type="hero"))  # a hero beat whose only performer has no mouth
+    assert len(silent) == 1 and "no drawing sings in it" in silent[0]
     assert any("top is taken by pip_point" in p for p in problems(stages[:1] + [act("show", 11.0, "leaf", pos="top")]))
     assert any("ring is taken by leaf" in p for p in problems([act("show", 10.0, "leaf", pos="left"), stages[0]]))
     assert any("ring is taken by egg" in p for p in problems([act("show", 10.0, "egg", pos="row"), stages[0]]))
     assert any("joins the ring with show" in p for p in problems([act("show", 10.0, "leaf", pos="center"),
                                                                   act("move", 11.0, "leaf", pos="ring", until=12.0)]))
-    full = Screen(background="meadow", on={d: "ring" for d in ("egg", "leaf", "twig", "arrow", "pip")})
+    full = Screen(background="meadow", on={d: "ring" for d in ("egg", "leaf", "twig", "arrow", "pip", "pip_point")})
     assert any("the ring is full" in p for p in problems([act("show", 10.0, "caterpillar", pos="ring")], before=full))
 
 

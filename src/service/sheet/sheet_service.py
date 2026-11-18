@@ -64,7 +64,7 @@ class SheetService:
             reply = self._images.generate(self._settings.host_model, prompt, [], aspect_for(host, "front"), seed=n,
                                           thinking="minimal")
             checklist = self._check.check(reply.data, [], brief)[0]
-            return reply, self._check.problems(checklist, brief), self._check.notes(checklist)
+            return reply, self._check.problems(checklist, brief), self._check.notes(checklist, brief)
 
         with ThreadPoolExecutor(max_workers=count) as pool:
             drawn = list(pool.map(draw, range(1, count + 1)))
@@ -147,7 +147,7 @@ class SheetService:
             checklist = self._check.check(self._storage.get(asset.path), [], brief)[0]
             problems = self._check.problems(checklist, brief)
             asset.review = ReviewState.PASSED if not problems else ReviewState.NEEDS_REVIEW
-            asset.review_notes = "\n".join(self._check.notes(checklist)) or None
+            asset.review_notes = "\n".join(self._check.notes(checklist, brief)) or None
             changed.append(self._assets.assets.update(asset))
             logger.info("host %s/%s rechecked: %s", band, view, "passed" if not problems else "still needs review")
         return changed
@@ -288,7 +288,7 @@ class SheetService:
             checklist, call = self._check.check(reply.data, labelled, brief)
             self._log_cost(run_id, StageName.VISUAL_IDENTITY, call.provider, call.model, call.cost_usd, target_id,
                            call.input_tokens + call.output_tokens, "tokens")
-            problems, notes = self._check.problems(checklist, brief), self._check.notes(checklist)
+            problems, notes = self._check.problems(checklist, brief), self._check.notes(checklist, brief)
             asset.params = {**asset.params, "score": checklist.score}
             asset.review_notes = "\n".join(notes) or None
             if not problems:

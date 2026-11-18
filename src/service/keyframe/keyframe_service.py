@@ -249,7 +249,7 @@ class KeyframeService:
         asset.params = {**asset.params, "score": checklist.score, "judged_by": model,
                         "asked_for": [a.model_dump() for a in checklist.asked_for]}
         asset.review = ReviewState.PASSED if not problems else ReviewState.FAILED
-        asset.review_notes = "\n".join(self._check.notes(checklist)) or None
+        asset.review_notes = "\n".join(self._check.notes(checklist, brief)) or None
         self._assets.assets.update(asset)
         logger.info("keyframe %s try %d rechecked by %s: %s, %d/10", asset.target_id, asset.params["try"], model,
                     asset.review, checklist.score)
@@ -404,7 +404,7 @@ class KeyframeService:
             drawn = f"{prompt} {correction}" if correction else prompt
             reply = self._images.generate(model, drawn, urls, ASPECT, seed=seed, thinking=thinking)
             checklist, call = self._check.check(reply.data, labelled, brief)
-            problems, findings = self._check.problems(checklist, brief), self._check.notes(checklist)
+            problems, findings = self._check.problems(checklist, brief), self._check.notes(checklist, brief)
             tries.append(Attempt(attempt=attempt, seed=seed, thinking=thinking, prompt=drawn, correction=correction,
                                  fix=fix, score=checklist.score,
                                  asked_for=[a.model_dump() for a in checklist.asked_for], notes=findings,
@@ -435,7 +435,7 @@ class KeyframeService:
         checklist, call = self._check.check(best.reply.data, labelled, plan.brief, model=model)
         problems = self._check.problems(checklist, plan.brief)
         best.second, best.problems, best.score = call, problems, checklist.score      # its verdict stands, either way
-        best.notes, best.asked_for = self._check.notes(checklist), [a.model_dump() for a in checklist.asked_for]
+        best.notes, best.asked_for = self._check.notes(checklist, plan.brief), [a.model_dump() for a in checklist.asked_for]
         if problems:
             logger.warning("keyframe %s: second opinion from %s agrees, try %d fails:\n%s", plan.key, model,
                            best.attempt, "\n".join(f"  - {p}" for p in problems))

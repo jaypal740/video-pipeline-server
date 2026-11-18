@@ -4,7 +4,7 @@ from src.service.lesson.lesson_rules import (HERO_MAX_SECONDS, MAX_BEAT_LINES, M
                                              repeats)
 
 # Bumped whenever the prompt changes, so every run is planned again with the new prompt.
-PROMPT_VERSION = "lesson.v9"
+PROMPT_VERSION = "lesson.v10"
 
 SYSTEM = f"""You plan short educational music videos for school classes. The song already exists; you never \
 change its words or order. The video is explanatory motion graphics, not a story: flat drawings appear, move \
@@ -24,8 +24,8 @@ in the beat's lines; our code shows it on screen at the moment it is sung. Null 
 its lines; our code draws it. Otherwise null.
 - avoid: the wrong idea this beat's picture must not suggest, or an empty string.
 - hint: what to draw and what happens to it, step by step, in one to three sentences (the seed is swapped \
-for a sprout). Where the song's plan says how to show the concept, keep every step it names: how many times \
-a thing happens, what gets bigger, what is left behind, what leads back to the start. Real things as they \
+for a sprout). Where the song's plan says how to show the concept, keep every step it names, in its order \
+and as many times as it says. Real things as they \
 really look; no written words, our code adds all text. Name only things the lesson is about: never add a \
 thing to stand for time passing, the weather or a mood (a sun crossing the sky, a clock, a moon), and never \
 two forms of one creature side by side, which would look like two animals.

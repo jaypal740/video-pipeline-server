@@ -4,6 +4,7 @@ from src.schema.lesson.lesson_schema import Beat, BeatType, GradeBand
 from src.schema.song.song_analysis_schema import TimedWord
 from src.schema.storyboard.script_schema import (Action, BeatScript, BeatScriptDraft, Drawing, DrawingKind,
                                                  DrawingList, Pos, Screen, ScriptRepair, Verb)
+from src.service.drawing.cutout import FAR, KEY, KEY_WORDS
 from src.service.lesson.lesson_rules import band_rules, sung_at
 from src.service.render.timeline import covers, scenes_of
 
@@ -12,7 +13,7 @@ MAX_ON_SCREEN = 4
 ABSENT = ("no", "not", "without")
 # A row or a ring of stages holds up to this many drawings. The row stands where left, center and right
 # are; the ring goes round the screen and leaves only its centre free.
-MAX_ROW = 5
+MAX_ROW = 6
 KEPT_CLEAR = {Pos.ROW: {Pos.LEFT, Pos.CENTER, Pos.RIGHT}, Pos.RING: {Pos.LEFT, Pos.RIGHT, Pos.TOP, Pos.BOTTOM}}
 PALETTE_COLOURS = (4, 6)
 # A stage's name, written under its drawing in a row or ring, is this many words at most.
@@ -46,6 +47,11 @@ def style_of(band: GradeBand) -> str:
     return f"{rules.style_name} with {rules.style}"
 
 
+def _from_key(colour: str) -> float:
+    """How far a hex colour is from the key colour, in RGB."""
+    return sum((int(colour[i:i + 2], 16) - k) ** 2 for i, k in zip((1, 3, 5), KEY)) ** 0.5
+
+
 def drawing_problems(listed: DrawingList, beats: list[Beat]) -> list[str]:
     """What the schema cannot check in the list of drawings. An empty list means it is usable."""
     found = []
@@ -55,6 +61,9 @@ def drawing_problems(listed: DrawingList, beats: list[Beat]) -> list[str]:
     if not PALETTE_COLOURS[0] <= len(listed.palette) <= PALETTE_COLOURS[1] \
             or not all(_HEX.match(c) for c in listed.palette):
         found.append(f"palette must be {PALETTE_COLOURS[0]} to {PALETTE_COLOURS[1]} hex colours such as #FFC857")
+    elif near := [c for c in listed.palette if _from_key(c) <= FAR]:    # cut away with the key colour around it
+        found.append(f"palette colours {', '.join(near)} are too close to {KEY_WORDS}, the colour every drawing is cut "
+                     "out from; choose colours further from it (no pinks, purples or magentas)")
     kinds = [d.kind for d in listed.drawings]
     poses = kinds.count(DrawingKind.PERFORMER)
     if DrawingKind.BACKGROUND not in kinds:
@@ -169,6 +178,9 @@ def _play_beat(script: BeatScriptDraft, beat: Beat, drawings: dict[str, Drawing]
         last = max(last, until)
     sung = [(who, at, until) for (at, who), (until, _) in zip(voices, voices[1:] + [(beat.end, None)])
             if who and until > at and beat.type == BeatType.HERO]
+    if beat.type == BeatType.HERO and not sung:                 # else the beat is left with no lip-sync
+        found.append(f"{beat.id} is a hero beat, but no drawing sings in it: a performer drawing that sings, its mouth "
+                     "showing, must be on screen in it, outside any row or ring")
     return found, Screen(background=script.background, on=on, sung=sung)
 
 

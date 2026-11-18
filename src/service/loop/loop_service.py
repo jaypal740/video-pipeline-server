@@ -37,8 +37,10 @@ class LoopService:
     drawings. Code checks that every frame cuts out, that the loop ends as it began
     and that something moves; the judge checks the frame furthest from the drawing against the drawing. A
     loop that fails is made again on a new seed, told what the checks found wrong; when that fails too the
-    better try is used (used_best). Only a drawing no loop of which could be cut out fails the stage. A
-    re-run with the same drawings reuses the stored loops."""
+    better try is used (used_best), unless the judge found it breaks a hard rule (a wrong idea, an added
+    face, text). A drawing with no usable loop, because every try breaks a hard rule or none could be cut
+    out, holds still in the film instead (still): its drawing has passed its own check. A re-run with the
+    same drawings reuses the stored loops."""
 
     def __init__(self, run_repository: RunRepository, asset_repository: AssetRepository, storage: Storage,
                  video: FalVideoService, cutter: LoopCutService, check: ImageCheckService, llm: LlmService,
@@ -83,17 +85,17 @@ class LoopService:
         except Exception as exc:
             fail_stage(self._runs, state, exc, logger, "loops")
             raise
-        failed = [name for name, a in made.items() if a.review == ReviewState.FAILED]
-        state.status = StageStatus.FAILED if failed else StageStatus.DONE
-        state.error = "; ".join(f"{name}: no loop could be cut out: {made[name].review_notes}" for name in failed) or None
+        still = [name for name, a in made.items() if a.review == ReviewState.FAILED]
+        state.status = StageStatus.DONE
         state.output = {"loops": {name: a.id for name, a in made.items()}, "until": until,
-                        "used_best": [name for name, a in made.items() if a.review == ReviewState.USED_BEST]}
+                        "used_best": [name for name, a in made.items() if a.review == ReviewState.USED_BEST],
+                        "still": still}
         state.finished_at = utcnow()
         self._runs.stage_states.update(state)
-        logger.log(logging.ERROR if failed else logging.INFO,
-                   "loops %s: %s, %d loops, %d retries, %d used best, %d failed, $%.2f on the run so far, %.0fs",
+        logger.log(logging.WARNING if still else logging.INFO,
+                   "loops %s: %s, %d loops, %d retries, %d used best, %d held still, $%.2f on the run so far, %.0fs",
                    run_id[:8], state.status, len(made), sum(a.params.get("try", 1) - 1 for a in made.values()),
-                   len(state.output["used_best"]), len(failed), self._assets.run_cost(run_id),
+                   len(state.output["used_best"]), len(still), self._assets.run_cost(run_id),
                    (state.finished_at - state.started_at).total_seconds())
         return made
 
@@ -146,11 +148,13 @@ class LoopService:
             reply = self._video.generate(model, asked, url, LOOP_SECONDS, seed=base + n, end_image_url=url)
             loop, cut, frame = self._cutter.cut(reply.data)
             made = Try(reply=reply, attempt=n + 1, cache_key=key, prompt=asked, correction=correction, fix=fix,
-                       loop=loop, cut=cut, problems=loop.problems, notes=loop.problems)
+                       loop=loop, cut=cut, problems=loop.problems, notes=loop.problems + loop.notes)
             if cut is not None:                                 # a loop that is no cut-out needs no judge
                 checklist, made.check = self._check.check(frame, reference, brief)
-                made.problems = loop.problems + self._check.problems(checklist, brief)
-                made.notes, made.score = loop.problems + self._check.notes(checklist), checklist.score
+                judged = self._check.problems(checklist, brief)
+                made.problems = loop.problems + judged
+                made.fatal = any(p.startswith(f"{rule}:") for p in judged for rule in brief.fatal)
+                made.notes, made.score = loop.problems + loop.notes + self._check.notes(checklist, brief), checklist.score
             tries.append(made)
             if not made.problems:
                 break
@@ -164,9 +168,9 @@ class LoopService:
 
     def _keep(self, run_id: str, drawing: Drawing, still: Asset, tries: list["Try"]) -> Asset:
         """Store every try under its own file, with its transparent version beside it, and say which one the
-        video uses: the try that passed; else the better one (one that closes and moves before one that does
-        not, then the higher score, then the later try), as used_best; else none, when no try could be cut
-        out, and the loop has failed."""
+        video uses: the try that passed; else the better one (one that breaks no hard rule, then one that
+        closes and moves, then the higher score, then the later try), as used_best when it breaks no hard
+        rule; else none, and the drawing holds still."""
         assets = []
         for t in tries:
             asset_id = new_id()
@@ -191,21 +195,24 @@ class LoopService:
         if assets[-1].review == ReviewState.PASSED:
             logger.info("loop %s: passed on try %d", drawing.id, len(assets))
             return assets[-1]
-        chosen, best = max(zip(tries, assets), key=lambda pair: (pair[0].cut is not None, not pair[0].loop.problems,
+        chosen, best = max(zip(tries, assets), key=lambda pair: (pair[0].cut is not None and not pair[0].fatal,
+                                                                 pair[0].cut is not None, not pair[0].loop.problems,
                                                                  pair[0].score, pair[0].attempt))
-        if chosen.cut is not None:                              # it could be cut out, so it can be used
+        if chosen.cut is not None and not chosen.fatal:         # it could be cut out and shows nothing wrong
             best.review = ReviewState.USED_BEST
             self._assets.assets.update(best)
             logger.warning("loop %s: no try passed; using try %d, %d/10", drawing.id, chosen.attempt, chosen.score)
+        elif chosen.cut is not None:
+            logger.warning("loop %s: every try breaks a hard rule; the drawing holds still", drawing.id)
         else:
-            logger.error("loop %s: no try could be cut out", drawing.id)
+            logger.warning("loop %s: no try could be cut out; the drawing holds still", drawing.id)
         return best
 
 
 class Try(BaseModel):
     """One loop of a drawing with what the checks found; score 0 when it was no cut-out and never judged.
     prompt: what this try was made from; correction and fix: what a retry's prompt was given and the call
-    that wrote it; cut: the transparent loop."""
+    that wrote it; cut: the transparent loop; fatal: the judge found it breaks a hard rule."""
 
     reply: VideoReply
     attempt: int
@@ -218,4 +225,5 @@ class Try(BaseModel):
     problems: list[str]
     notes: list[str]
     score: int = 0
+    fatal: bool = False
     check: LlmCall | None = None

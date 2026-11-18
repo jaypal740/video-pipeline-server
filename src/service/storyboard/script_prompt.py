@@ -7,7 +7,7 @@ from src.service.storyboard.script_rules import (MAX_ON_SCREEN, MAX_ROW, MAX_STI
                                                  PALETTE_COLOURS, ZOOM_LEAST, ZOOM_MOST, style_of)
 
 # Bumped whenever the prompt changes, so every run is scripted again with the new prompt.
-PROMPT_VERSION = "storyboard.v23"
+PROMPT_VERSION = "storyboard.v24"
 
 SYSTEM = """You direct short educational music videos for school classes, made as motion graphics: flat 2D \
 drawings appear, move and swap in exact time with the song. The song and its lesson plan already exist. The \
@@ -15,7 +15,7 @@ plan splits the song into beats, each teaching one idea. Every drawing is made o
 in each beat that needs it, so the whole video keeps one look.
 
 There are four kinds of drawing:
-- performer: whoever sings the song (the Sun, a caterpillar, a child), in one pose. The performer is the \
+- performer: whoever sings the song (the Sun, the Earth, a child), in one pose. The performer is the \
 only drawing with a face. It sings the hero beats and may appear in others. When the performer is the very \
 thing the song teaches about (a water drop singing about the water cycle), the performer acts the lesson \
 out: it is drawn in each state the lesson shows, and no separate copy of that thing is drawn without a face. \
@@ -36,25 +36,25 @@ video must not teach."""
 DRAWINGS_TASK = f"""List every drawing this video needs, and no more than it needs. A thing that appears in \
 several beats is one drawing; add another state of it only where the lesson shows the change (a seed, a \
 sprout, a grown plant). A thing that hangs from, sits on or grows out of another is one drawing that shows \
-the two joined (a nest on its branch, a fruit on its twig): our code places drawings side by side and cannot \
-join them, and a drawing shows nothing its look does not name. What one thing does to another (a caterpillar \
-eating a leaf, a bee drinking from a flower) is likewise one drawing of it doing so, the two touching, and \
-the doing is its motion (chewing); never stand the thing beside it and swap the thing. A drawing is on \
-screen once at a time: when several of the same thing must be seen together (three fallen leaves), list one \
+the two joined (a nest on its branch): our code places drawings side by side and cannot \
+join them, and a drawing shows nothing its look does not name. What one thing does to another (a bee \
+drinking from a flower) is likewise one drawing of it doing so, the two touching, and \
+the doing is its motion (sipping); never stand the thing beside it and swap the thing. A drawing is on \
+screen once at a time: when several of the same thing must be seen together (three clouds), list one \
 drawing for each. Every drawing is something the lesson names; our code draws the arrows between stages. \
 The sun, the sky, the weather and the time of day belong in a background, never in a drawing of their own, \
 unless the song is about them, and nothing is drawn to stand for time passing (a sun crossing the sky, a \
 clock). List one background for each place the writers' plan sets its scenes in, at most six, places that \
 look alike sharing one; where it names no places, two to four, one for each part of the song. A background \
-is the real place around the subject, seen close enough to know it (under a leafy branch, inside a beehive, \
+is the real place around the subject, seen close enough to know it (inside a beehive, beside a pond, \
 a flower garden), and a chorus has one open place of its own. A change the lesson teaches (ice melting, a \
 chick hatching) is drawn as its steps, one drawing each: the thing just before, the moment it changes, and \
 the thing after, whose look says what is now different. When a living thing changes its form (a tadpole \
 into a frog), the look of every drawing of the new form says its whole new body, each part with its real \
 shape and colour (a frog's wide head, short rounded body and four legs), and the one small thing it keeps so the viewer \
 knows who it is (its eyes). Nothing of the old body is left to be assumed: a real animal is never drawn as a \
-mix of two forms. What a thing leaves behind (an empty shell, a fallen \
-leaf) has the shape and markings of the thing it came from, and whatever appears in two drawings is described \
+mix of two forms. What a thing leaves behind (an empty \
+shell) has the shape and markings of the thing it came from, and whatever appears in two drawings is described \
 with the same words in both. When the lesson is a cycle, list the drawing in which its last stage makes \
 its first (the grown plant dropping its seed). For each drawing give:
 - id: a short snake_case name.
@@ -64,7 +64,7 @@ Say only what is seen, never what is absent: the picture is drawn from these wor
 gets drawn. For a thing that has lost something, say what is there now (a tree of bare brown branches).
 - name: when the lesson teaches a process, each of its stages has one drawing that stands for it in the row \
 or ring; give that drawing the stage's name as a child should learn it, in one or two words, a key term \
-where one fits (egg, larva, pupa, adult). Our code writes it under the drawing there. Null for every other \
+where one fits. Our code writes it under the drawing there. Null for every other \
 drawing.
 - of: when it shows the same body as an earlier drawing in another pose (a bird flying, of the same bird \
 perched), that drawing's id, so the two are drawn alike. A thing that has changed into something \
@@ -121,7 +121,8 @@ drawing zoomed big reaches into the places beside it. Our code lays the frames o
 you what covers what.
 - Each beat plays on the background of the place its part of the story happens in; a chorus, and a row or \
 ring, keep one open place every time they come.
-- A row or ring shows every stage of a process together, but small. So tell the process big first: on the \
+- When the lesson teaches a process: a row or ring shows every stage of it together, but small. So tell the \
+process big first: on the \
 line that sings of a stage, that stage is at center, big, and is seen changing from the stage before it. \
 Then gather the stages on the line that names or sums up the whole process (in a chorus, its last line): \
 clear the middle and show each stage's named drawing at pos row, in its true order, a moment apart, so the \
@@ -130,7 +131,7 @@ ring instead. Do it this way even where the writers' plan lights a circle up lin
 nothing else is at left, center or right. While the ring is up nothing else is at left, right, top or \
 bottom. Its middle stays empty; only when the performer is not itself one of the stages may a hero beat's \
 singer stand there, at pos center.
-- A cycle is closed on screen: when the song says it starts again, show its last stage making its first \
+- When the lesson is a cycle, it is closed on screen: when the song says it starts again, show its last stage making its first \
 (the bird with its new egg), then the first stage once more.
 - In a hero beat the performer is on screen from the beat's start, and our code makes whichever of its \
 drawings has a mouth sing. A performer that only presents stays, in one pose, beside what the beat shows. A \
@@ -143,9 +144,9 @@ step, by a quarter or more each time, starting small enough to leave room, so it
 When the song says it happens again, \
 play the steps again, as many times as the plan says.
 - A music beat has no lyrics, and some beats go on long after their lines are sung. Fill that time with \
-the lesson: at the song's start, the thing the lesson starts with, coming alive; later, a replay of the stages \
-taught so far, big and one at a time, in order, each doing what it does, ending on the picture the next beat \
-or the plan's ending needs.
+the lesson: at the song's start, the thing the lesson starts with, coming alive; later, a replay of what the \
+song has shown so far (the stages taught so far, when the lesson is a process), big and one at a time, in \
+order, each doing what it does, ending on the picture the next beat or the plan's ending needs.
 - When a chorus is sung again, stage it as it was staged the first time: the same background, the same \
 drawings in the same places and order, timed to the new lines, so the viewer knows the picture and can sing \
 along. A hero beat is staged the same way; only a performer that just presents is added beside it."""
@@ -162,8 +163,8 @@ made. Go through what each beat must teach (its concept, its hint and the writer
 child watching with the sound off would not see or would get wrong:
 - a step of a change that is missing, out of order or shown fewer times than it is sung;
 - a thing that is sung about but is not on screen as it is sung, or the wrong thing on screen under a key word;
-- something the lines sing of doing (eating, drinking, laying) that is not seen being done by the one who does it;
-- a cycle whose last stage is not shown leading back to its first;
+- something the lines sing of a thing doing that is not seen being done by the one who does it;
+- in a lesson that is a cycle, its last stage not shown leading back to its first;
 - a chorus that comes back staged differently from its first time;
 - a drawing that is decoration and teaches nothing, or shows something the lesson does not name: a sun, a \
 moon or a clock put in to show time passing must go;
@@ -186,7 +187,7 @@ ones. A beat that follows a changed beat on the same background starts with what
 change it too if it no longer fits.
 - drawings: only the new drawings those beats need, each with id, kind, look, of, motion and sings as the \
 listed drawings have them. Never list a drawing again. A drawing is on screen once at a time, so when several \
-of the same thing must be seen together (three fallen leaves) each is a drawing of its own.
+of the same thing must be seen together (three clouds) each is a drawing of its own.
 Leave a gap as it is when our drawings and actions cannot close it.
 
 {LIMITS}

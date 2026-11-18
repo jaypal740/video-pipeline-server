@@ -12,6 +12,8 @@ TEMPLATES = Path(__file__).resolve().parents[2] / "templates"
 REPEAT_SIMILAR = 0.8
 _AD_LIB = re.compile(r"\([^)]*\)")
 _WORD = re.compile(r"[a-z0-9']+")
+# What a section tag adds to its kind: [Final Chorus] and [Chorus x2] are the chorus.
+_SECTION_EXTRA = re.compile(r"^(?:final|last)\s+|\s+x\d*$")
 _SENTENCE_END = re.compile(r"[.!?]\s+\S")
 # A beat teaches one idea: with more lines than this, or longer than this, it holds more than one.
 MAX_BEAT_LINES = 4
@@ -52,20 +54,23 @@ def _words(text: str) -> list[str]:
 
 
 def repeats(lines: list[LyricLine]) -> dict[int, int]:
-    """Lines that repeat an earlier line of the same section (a chorus sung again, ad-libs and punctuation
-    aside), mapped to that earlier line's index. Untagged and unclear lines never count as repeats."""
-    first: list[LyricLine] = []
-    found = {}
+    """Lines that repeat a line of an earlier time their section was sung (a chorus sung again, ad-libs and
+    punctuation aside), mapped to that earlier line's index. A line sung twice within one time through its
+    section is no repeat. Untagged and unclear lines never count as repeats."""
+    first: list[tuple[LyricLine, str, int]] = []
+    found, block, last = {}, 0, None
     for line in lines:
+        if line.section != last:                                # a new time through a section
+            block, last = block + 1, line.section
         if line.section is None or line.unclear:
             continue
-        words = _words(line.text)
+        kind, words = _SECTION_EXTRA.sub("", line.section).strip(), _words(line.text)
         score, match = max(((SequenceMatcher(None, words, _words(f.text)).ratio(), f.index)
-                            for f in first if f.section == line.section), key=lambda m: m[0], default=(0.0, None))
+                            for f, k, b in first if k == kind and b < block), key=lambda m: m[0], default=(0.0, None))
         if score >= REPEAT_SIMILAR:
             found[line.index] = match
         else:
-            first.append(line)
+            first.append((line, kind, block))
     return found
 
 

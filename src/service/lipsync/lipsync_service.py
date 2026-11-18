@@ -231,7 +231,7 @@ class LipsyncService:
                 refs = [LabelledImage(label=KEYFRAME_LABEL, data=keyframe_png)]
                 checklist, call = self._check.check(middle, refs, brief)
                 score, asked_for = checklist.score, [a.model_dump() for a in checklist.asked_for]
-                problems, notes = self._check.problems(checklist, brief), self._check.notes(checklist)
+                problems, notes = self._check.problems(checklist, brief), self._check.notes(checklist, brief)
             tries.append(Attempt(attempt=attempt, seed=seed, reply=reply, data=data, checks=checks, code_problems=found,
                                  score=score, asked_for=asked_for, notes=notes, problems=problems, check=call,
                                  cache_key=cache_key))

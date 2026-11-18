@@ -23,7 +23,7 @@ from src.service.storyboard.storyboard_service import StoryboardService
 logger = logging.getLogger(__name__)
 
 STAGE = StageName.QC
-VERSION = "filmcheck.v3"    # part of the check's inputs: raise it when the same film should be judged again
+VERSION = "filmcheck.v4"    # part of the check's inputs: raise it when the same film should be judged again
 # The judge sees the film as at most MAX_FRAMES frames, each HEIGHT pixels tall: every drawing once it has
 # come, SETTLE seconds after it or anything else began to fade in or out, and, where there is room, the
 # picture after each move, zoom and key word, at least APART seconds from the frames already chosen.
@@ -38,7 +38,7 @@ each beat's steps as the script times them, what each drawing is meant to show, 
 in order, each labelled with its second. In these frames every drawing holds still; in the film each one \
 moves a little on the spot. The frames are moments, not the whole film: a step the script lists between two \
 frames is in the film though you have no frame of it, so never report it as missing. The picture follows the \
-song: showing what a line itself sings (three molts when the line sings of three) is never a fault.
+song: showing what a line itself sings (three of a thing when the line sings of three) is never a fault.
 
 List every problem a careful teacher would not let through:
 - wrong_learning: a child would learn something false from the picture: it goes against what that beat \
@@ -171,7 +171,8 @@ class FilmCheckService:
     def _mend(self, run_id: str, problems: list[FilmProblem]) -> list[FilmProblem]:
         """One repair: the script's beats the problems fall in are written again, what is new is drawn, and
         the film is judged again. A repair that cannot be written or drawn, or that leaves the film with more
-        problems than it had, is undone."""
+        problems than it had, is undone, and the drawings stage is run again on the old script, so its record
+        matches it once more; every drawing it needs is stored already, so nothing is drawn again."""
         board = script_of(self._runs, run_id)
         beat = lambda at: next((b.beat for b in board.beats if b.start <= at < b.end), board.beats[-1].beat)
         try:
@@ -183,6 +184,7 @@ class FilmCheckService:
             again = None
         if again is None or len(again) > len(problems):
             self._storyboard.restore(run_id, board)
+            self._drawings.run(run_id)
             return problems
         return again
 

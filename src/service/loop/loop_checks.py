@@ -16,12 +16,14 @@ from src.service.local.ffmpeg_service import FfmpegService
 # and the second frame 6 from compression alone.
 BUSIEST = 99
 CLOSES = 30.0               # a last frame further than this from the first makes the loop jump when it repeats
-MOVES = 40.0                # a loop no frame of which gets this far from the first reads as a still picture
+MOVES = 40.0                # a loop no frame of which gets this far from the first reads as a still picture;
+                            # only noted, since a gentle motion (a glow, a slow sprout) is still a usable loop
 
 
 class LoopCheck(BaseModel):
     """What code read off a loop. gap: how far the last frame is from the first; motion: how far the
-    furthest frame is; uncut: what made frames unusable as cut-outs, one line per such frame."""
+    furthest frame is; uncut: what made frames unusable as cut-outs, one line per such frame; problems: what
+    makes the loop unusable; notes: what is worth knowing but does not fail it."""
 
     seconds: float
     fps: float
@@ -32,6 +34,7 @@ class LoopCheck(BaseModel):
     motion: float
     uncut: list[str]
     problems: list[str] = []
+    notes: list[str] = []
 
 
 def cut_frames(frames: np.ndarray, sink: BinaryIO) -> tuple[float, float, int, list[str]]:
@@ -56,9 +59,12 @@ def problems_of(check: LoopCheck) -> list[str]:
     if check.gap > CLOSES:
         found.append(f"the last frame is not the first again (differs by {check.gap:.0f}); the loop would jump "
                      "each time it repeats")
-    if check.motion < MOVES:
-        found.append(f"almost nothing moves (motion {check.motion:.0f}); the loop reads as a still picture")
     return found
+
+
+def notes_of(check: LoopCheck) -> list[str]:
+    return [f"almost nothing moves (motion {check.motion:.0f}); the loop reads as a still picture"] \
+        if check.motion < MOVES else []
 
 
 class LoopCutService:
@@ -81,7 +87,7 @@ class LoopCutService:
                 gap, motion, furthest, uncut = cut_frames(frames, sink)
             check = LoopCheck(seconds=info["seconds"], fps=info["fps"], width=width, height=height, frames=len(frames),
                               gap=round(gap, 1), motion=round(motion, 1), uncut=uncut)
-            check.problems = problems_of(check)
+            check.problems, check.notes = problems_of(check), notes_of(check)
             if not uncut:
                 self._ffmpeg.run(["-f", "rawvideo", "-pix_fmt", "rgba", "-s", f"{width}x{height}", "-r", f"{info['fps']:g}",
                                   "-i", str(raw), "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "24",

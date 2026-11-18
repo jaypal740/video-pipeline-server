@@ -6,8 +6,6 @@ from src.service.intake.intake_lyrics import parse_lyrics
 
 # A song's JamWise export, kept next to its audio.
 JAMWISE_FILE = "jamwise.json"
-# A line shorter than this cannot carry a shot; JamWise has timed one at 0.28 s.
-UNCLEAR_SHORTER = 0.5
 # How far past the end of the audio a timing may run before it is wrong.
 END_SLACK = 0.5
 
@@ -37,6 +35,5 @@ def jamwise_lines(timing: list[dict], lyrics: list[str], duration: float) -> tup
             at = min(starts[i:])                                           # a word is never sung after the words that follow it
             words.append(TimedWord(index=len(words), line_index=li, text=word, start=at,
                                    end=w["end"] if at == w["start"] else at, confidence=1.0))
-        lines.append(LyricLine(index=li, text=text, start=start, end=end, confidence=1.0,
-                               unclear=end - start < UNCLEAR_SHORTER))
+        lines.append(LyricLine(index=li, text=text, start=start, end=end, confidence=1.0))   # JamWise sang it: never unclear
     return words, lines

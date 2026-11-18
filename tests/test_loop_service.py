@@ -15,7 +15,7 @@ from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_schema import Song
 from src.service.drawing.cutout import KEY
 from src.service.local.ffmpeg_service import FfmpegService
-from src.service.loop.loop_checks import LoopCheck, LoopCutService, cut_frames, problems_of
+from src.service.loop.loop_checks import LoopCheck, LoopCutService, cut_frames, notes_of, problems_of
 from src.service.loop.loop_prompt import loop_brief, loop_prompt
 from src.service.render.film_check_service import film_key
 from src.service.storage.storage_service import LocalStorage
@@ -99,9 +99,9 @@ def test_a_loop_that_sways_and_comes_back_closes_and_moves_and_every_frame_is_cu
     assert cut[2, 0, 0, 3] == 0 and cut[2, 30, 40, 3] == 255 and cut[0, 30, 50, 3] == 0      # the square, where it is
 
 
-def test_a_still_loop_one_that_does_not_come_back_and_one_that_leaves_the_frame_are_problems():
-    assert problems_of(loop()) == []
-    assert "almost nothing moves" in problems_of(loop(motion=6.0))[0]
+def test_a_loop_that_does_not_come_back_or_leaves_the_frame_is_a_problem_and_a_still_one_only_a_note():
+    assert problems_of(loop()) == [] and notes_of(loop()) == []
+    assert problems_of(loop(motion=6.0)) == [] and "almost nothing moves" in notes_of(loop(motion=6.0))[0]
     assert "would jump each time it repeats" in problems_of(loop(gap=160.0))[0]
     gap, motion, _, uncut = cut_frames(frames([16, 24, 32, 36], box=32), io.BytesIO())    # slides to the edge and stays
     assert gap > 100 and len(uncut) == 2 and "the frame's edge" in uncut[0]
@@ -160,11 +160,11 @@ def test_only_the_loops_the_first_seconds_need_are_made_and_the_same_drawings_re
 
 def test_a_loop_that_fails_is_made_again_told_what_was_wrong(container, stage):
     service, video, cutter, vision, run = stage
-    cutter.found = [loop(motion=6.0)]
+    cutter.found = [loop(gap=160.0)]
     made = service.run(run.id, until=4)["dot_point"]
     assert made.review == ReviewState.PASSED and made.params["try"] == 2 and made.params["correction"] == FIX
     assert [prompt.endswith(f" {FIX}") for prompt, *_ in video.calls] == [False, True]
-    assert "What the judge found wrong:\n- almost nothing moves" in vision.asked[0]
+    assert "What the judge found wrong:\n- the last frame is not the first again" in vision.asked[0]
 
 
 def test_when_the_second_loop_fails_too_the_better_one_is_used_and_the_stage_goes_on(container, stage):
@@ -178,13 +178,13 @@ def test_when_the_second_loop_fails_too_the_better_one_is_used_and_the_stage_goe
     assert service.run(run.id, until=4, force=True)["dot_point"].path == made.path and len(video.calls) == 2
 
 
-def test_a_drawing_no_loop_of_which_can_be_cut_out_fails_the_stage(container, stage):
+def test_a_drawing_no_loop_of_which_can_be_cut_out_holds_still_and_the_stage_goes_on(container, stage):
     service, video, cutter, vision, run = stage
     cutter.found = [loop(uncut=["only 60% of the frame's edge is flat"])] * 2
     made = service.run(run.id, until=4)["dot_point"]
     assert made.review == ReviewState.FAILED and made.params["cut"] is None and vision.seen == []
     state = container.run_repository().stage(run.id, StageName.LOOPS)
-    assert state.status == StageStatus.FAILED and "dot_point: no loop could be cut out" in state.error
+    assert state.status == StageStatus.DONE and state.error is None and state.output["still"] == ["dot_point"]
 
 
 def test_no_loop_is_made_until_the_film_check_has_passed_these_drawings(container, stage):
