@@ -182,7 +182,7 @@ class VideoService:
                 add_cost(self._assets, run_id, StageName.VIDEO, call.provider, call.model, call.cost_usd, shot.id,
                          call.input_tokens + call.output_tokens, "tokens")
                 score, asked_for = checklist.score, [a.model_dump() for a in checklist.asked_for]
-                problems, notes = self._check.problems(checklist, brief), self._check.notes(checklist)
+                problems, notes = self._check.problems(checklist, brief), self._check.notes(checklist, brief)
             asset.params = {**asset.params, "score": score, "asked_for": asked_for, "checks": checks.problems,
                             "motion": checks.motion, "tail_motion": checks.tail_motion,
                             "active_seconds": checks.active_seconds}
@@ -320,7 +320,7 @@ class VideoService:
                         LabelledImage(label="the keyframe it was animated from", data=keyframe_png)]
                 checklist, call = self._check.check(middle, refs, brief)
                 score, asked_for = checklist.score, [a.model_dump() for a in checklist.asked_for]
-                problems, notes = self._check.problems(checklist, brief), self._check.notes(checklist)
+                problems, notes = self._check.problems(checklist, brief), self._check.notes(checklist, brief)
             else:
                 problems = list(checks.problems)
             findings = notes

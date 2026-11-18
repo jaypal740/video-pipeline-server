@@ -6,8 +6,6 @@ from src.service.intake.intake_lyrics import parse_lyrics
 
 # A song's JamWise export, kept next to its audio.
 JAMWISE_FILE = "jamwise.json"
-# A line shorter than this cannot carry a shot; JamWise has timed one at 0.28 s.
-UNCLEAR_SHORTER = 0.5
 # How far past the end of the audio a timing may run before it is wrong.
 END_SLACK = 0.5
 
@@ -35,12 +33,13 @@ def jamwise_lines(timing: list[dict], lyrics: list[str], duration: float) -> tup
         written, timed = text.split(), line["words"]
         if [l for _, l in parse_lyrics(line["text"])] != [text] or len(timed) != len(written):
             raise ValueError(f"line {li} {text!r} does not match JamWise's {line['text']!r}")
-        start, end = line["startTime"], line["endTime"]
+        starts = [w["start"] for w in timed]
+        start, end = min(line["startTime"], *starts), line["endTime"]      # JamWise stamps some first words, and their lines, after the second word
         if not 0 <= start <= end <= duration + END_SLACK or any(w["end"] < w["start"] for w in timed):
             raise ValueError(f"line {li} {text!r} has impossible timing {start}-{end}s in {duration}s of audio")
-        for word, w in zip(written, timed):
-            words.append(TimedWord(index=len(words), line_index=li, text=word, start=w["start"], end=w["end"],
-                                   confidence=1.0))
-        lines.append(LyricLine(index=li, text=text, start=start, end=end, confidence=1.0,
-                               unclear=end - start < UNCLEAR_SHORTER))
+        for i, (word, w) in enumerate(zip(written, timed)):
+            at = min(starts[i:])                                           # a word is never sung after the words that follow it
+            words.append(TimedWord(index=len(words), line_index=li, text=word, start=at,
+                                   end=w["end"] if at == w["start"] else at, confidence=1.0))
+        lines.append(LyricLine(index=li, text=text, start=start, end=end, confidence=1.0))   # JamWise sang it: never unclear
     return words, lines

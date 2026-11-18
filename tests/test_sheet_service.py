@@ -275,3 +275,11 @@ def test_a_thing_is_drawn_and_judged_as_many_as_its_description_says():
     assert "Exactly one object" not in rules and "As many items as the description says" in rules
     assert "has no face" in rules                                # a real thing, but a song's character keeps its face
     assert "has no face" not in " ".join(sheet_brief(group.model_copy(update={"kind": CastKind.CHARACTER}), "front").rules)
+
+
+def test_reworded_fatal_rule_still_fails():
+    rule = "No people or faces anywhere"
+    checklist = Checklist(asked_for=[], score=9, score_reason="good",
+                          answers=[Answer(rule="No people", ok=False, reason="a girl stands left")])
+    assert checklist.problems(7, [rule], [rule]) == [f"{rule}: a girl stands left"]
+    assert checklist.notes(7, [rule]) == [f"{rule}: a girl stands left"]

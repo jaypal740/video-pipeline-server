@@ -20,7 +20,7 @@ from src.service.local.forced_align_service import ForcedAlignService
 logger = logging.getLogger(__name__)
 
 # Bumped whenever the analysis changes, so every song is analysed again with the new code.
-ANALYZER_VERSION = "intake.v2"
+ANALYZER_VERSION = "intake.v3"
 
 
 def sha256_file(path: Path) -> str:

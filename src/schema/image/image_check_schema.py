@@ -45,17 +45,19 @@ class Checklist(BaseModel):
             gaps.append("score")
         return gaps + [f"rule {i}" for i in range(len(self.answers) + 1, len(brief.rules) + 1)]
 
-    def notes(self, pass_score: int) -> list[str]:
-        """Everything the judge found wrong, for the record and for the retry's correction."""
+    def notes(self, pass_score: int, rules: list[str]) -> list[str]:
+        """Everything the judge found wrong, for the record and for the retry's correction. Answers are
+        matched to `rules` by position, so a rule the judge reworded is still known by our own words."""
         found = [f"the moment asks for {a.item}: {a.reason}" for a in self.asked_for if not a.ok]
-        found += [f"{a.rule}: {a.reason}" for a in self.answers if not a.ok]
+        found += [f"{rule}: {a.reason}" for rule, a in zip(rules, self.answers) if not a.ok]
         if self.score < pass_score:
             found.append(f"matches the description {self.score}/10 (needs {pass_score}): {self.score_reason}")
         return found
 
-    def problems(self, pass_score: int, fatal: list[str]) -> list[str]:
-        """What fails the try: a score under the bar, or a fatal rule answered no."""
-        found = [f"{a.rule}: {a.reason}" for a in self.answers if not a.ok and a.rule in fatal]
+    def problems(self, pass_score: int, rules: list[str], fatal: list[str]) -> list[str]:
+        """What fails the try: a score under the bar, or a fatal rule answered no. Answers are matched to
+        `rules` by position, not by the words the judge copied back, which it may shorten or reword."""
+        found = [f"{rule}: {a.reason}" for rule, a in zip(rules, self.answers) if not a.ok and rule in fatal]
         if self.score < pass_score:
             found.append(f"matches the description {self.score}/10 (needs {pass_score}): {self.score_reason}")
         return found
