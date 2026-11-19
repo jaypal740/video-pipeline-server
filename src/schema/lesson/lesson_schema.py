@@ -2,6 +2,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from src.schema.enums import FilmType
+
 
 class GradeBand(StrEnum):
     K_2 = "k-2"
@@ -44,7 +46,7 @@ class BandRules(BaseModel):
     camera_moves: list[str]
     max_people_in_frame: int
     max_camera_speed: str
-    # Image prompts: style_name names the medium ("A bold 2D cartoon"), style lists its design features
+    # Image prompts: style_name names the medium ("A hand-painted 2D storybook"), style lists its design features
     # (outlines, shading, proportions). look stays the plain-words version the planners read.
     style: str
     style_name: str
@@ -79,6 +81,27 @@ class LessonLine(BaseModel):
     show: str
     tag: LineTag
     number_text: str | None = None
+    keyword: str | None = None          # the word to remember from the line, as it is sung; code shows it
+
+
+class LessonSequence(BaseModel):
+    """A run of lines on one topic, shown in one place. change: what visibly changes from its first shot
+    to its last; terms: the key terms its lines name and its pictures show; fact: what a viewer must
+    understand from the pictures alone, with the sound off; steps: the visible stages that show it, in order;
+    shown_terms: key terms its pictures show and name although its lines don't sing them (the corona, when
+    explaining the Sun's layers); scenes: the scenes of the song's own plan it is built from, in order, none
+    for a chorus or a song without a plan."""
+
+    first_line: int
+    last_line: int
+    topic: str
+    place: str
+    change: str
+    terms: list[str] = Field(default_factory=list)
+    fact: str = ""
+    steps: list[str] = Field(default_factory=list)
+    shown_terms: list[str] = Field(default_factory=list)
+    scenes: list[int] = Field(default_factory=list)
 
 
 class LessonDraft(BaseModel):
@@ -92,11 +115,14 @@ class LessonDraft(BaseModel):
     key_terms: list[KeyTerm]
     must_not_teach: list[str]
     lines: list[LessonLine]
+    sequences: list[LessonSequence] = Field(default_factory=list)
 
 
 class LessonPlan(LessonDraft):
-    """Stage 2 output: the draft once code has checked it, with what it was made from."""
+    """Stage 2 output: the draft once code has checked it, with what it was made from. film_type is None only
+    on plans stored before film types existed."""
 
     grade_band: GradeBand
+    film_type: FilmType | None = None
     model: str
     prompt_version: str

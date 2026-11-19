@@ -49,7 +49,7 @@ class FalLipsyncService:
     def _generate(self, model: str, image_url: str, audio_url: str, audio_seconds: float,
                   seed: int | None) -> LipsyncReply:
         spec = lipsync_model(model)
-        arguments = {"image_url": image_url, "audio_url": audio_url, **spec.fixed}
+        arguments = {f"{spec.source}_url": image_url, "audio_url": audio_url, **spec.fixed}
         if spec.seeded and seed is not None:
             arguments["seed"] = seed
         started = time.monotonic()

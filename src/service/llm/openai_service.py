@@ -16,7 +16,7 @@ class OpenAiService:
         self._client: OpenAI | None = None
 
     def inspect(self, model: str, system: str, user: str, images: list[LabelledImage],
-                output_type: type[BaseModel]) -> ProviderReply:
+                output_type: type[BaseModel], effort: str) -> ProviderReply:
         raise NotImplementedError("image checks through OpenAI are not wired yet; use a claude-* model")
 
     def parse(self, model: str, system: str, user: str, output_type: type[BaseModel], effort: str) -> ProviderReply:

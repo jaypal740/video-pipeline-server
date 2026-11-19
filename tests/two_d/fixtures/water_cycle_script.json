@@ -1,0 +1,416 @@
+{
+ "grade_band": "3-5",
+ "style": "A bold 2D cartoon with thick clean dark outlines, flat saturated colours, crisp simple shapes and five-heads-tall proportions",
+ "palette": [
+  "#1E88E5",
+  "#4DD0E1",
+  "#FFC93C",
+  "#F5F7FA",
+  "#7A5230",
+  "#263238"
+ ],
+ "performer": "Wade, a cheerful, determined water droplet with big warm expressive eyes and a tiny mouth, who keeps those same eyes in every form as he travels through the whole water cycle.",
+ "drawings": [
+  {
+   "id": "wade_drop",
+   "kind": "performer",
+   "look": "Wade as a round, plump, translucent blue-cyan water droplet with a pointed top, a warm white highlight gleam, big expressive dark eyes and a tiny determined mouth, standing upright.",
+   "name": null,
+   "of": null,
+   "motion": "wiggles and bobs gently",
+   "sings": true
+  },
+  {
+   "id": "wade_stretch",
+   "kind": "performer",
+   "look": "Wade as the same round, plump, translucent blue-cyan water droplet with a white highlight gleam, big expressive eyes and tiny mouth, stretched tall and thin upward from a puddle of rippling ocean water at his base.",
+   "name": null,
+   "of": "wade_drop",
+   "motion": "stretches up and springs back",
+   "sings": true
+  },
+  {
+   "id": "wade_wisp",
+   "kind": "performer",
+   "look": "Wade as a faint, wavy, shimmering pale-cyan wisp of water vapor curling upward, nearly see-through, with Wade's same big expressive eyes near its top.",
+   "name": "evaporation",
+   "of": null,
+   "motion": "drifts upward, wavering",
+   "sings": false
+  },
+  {
+   "id": "wade_eyes",
+   "kind": "performer",
+   "look": "Wade's two big expressive dark eyes with white highlights, floating side by side in the air.",
+   "name": "water vapor",
+   "of": null,
+   "motion": "float and blink slowly",
+   "sings": false
+  },
+  {
+   "id": "wade_raindrop",
+   "kind": "performer",
+   "look": "Wade as a falling translucent blue-cyan teardrop-shaped raindrop with a white highlight gleam, his big expressive eyes and tiny mouth, pointed top tipped upward.",
+   "name": null,
+   "of": "wade_drop",
+   "motion": "falls with a little wobble",
+   "sings": true
+  },
+  {
+   "id": "wade_snowflake",
+   "kind": "performer",
+   "look": "Wade as a flat white-and-ice-blue six-armed snowflake with branching arms, with Wade's big expressive eyes in its centre.",
+   "name": null,
+   "of": null,
+   "motion": "spins slowly while drifting down",
+   "sings": false
+  },
+  {
+   "id": "wade_sleet",
+   "kind": "performer",
+   "look": "Wade as a small round clear pale-blue pellet of ice with a white frosty gleam, with Wade's big expressive eyes on its front.",
+   "name": null,
+   "of": null,
+   "motion": "tumbles as it drops",
+   "sings": false
+  },
+  {
+   "id": "bg_ocean",
+   "kind": "background",
+   "look": "A wide open deep cyan-blue ocean surface stretching to a flat horizon under a clear sky, with a blazing golden sun in the upper corner and warm golden light on the water.",
+   "name": null,
+   "of": null,
+   "motion": null,
+   "sings": false
+  },
+  {
+   "id": "bg_atmosphere",
+   "kind": "background",
+   "look": "High open sky above a distant curved blue ocean horizon, with warm golden air layers low down fading to pale blue higher up.",
+   "name": null,
+   "of": null,
+   "motion": null,
+   "sings": false
+  },
+  {
+   "id": "bg_cloud_inside",
+   "kind": "background",
+   "look": "The inside of a towering storm cloud, heaving blue-grey billows with cold white edges filling the frame.",
+   "name": null,
+   "of": null,
+   "motion": null,
+   "sings": false
+  },
+  {
+   "id": "bg_sky_landscape",
+   "kind": "background",
+   "look": "Open sky seen from high up, with breaks in white clouds showing a patchwork landscape far below of green forests, yellow fields, a winding blue river and the blue ocean.",
+   "name": null,
+   "of": null,
+   "motion": null,
+   "sings": false
+  },
+  {
+   "id": "bg_hillside",
+   "kind": "background",
+   "look": "A green grassy hillside under a blue sky with a blue stream running down it toward the ocean in the distance, and a house with a garden at the side.",
+   "name": null,
+   "of": null,
+   "motion": null,
+   "sings": false
+  },
+  {
+   "id": "bg_ground_layers",
+   "kind": "background",
+   "look": "A cross-section of the ground with grass on top, then a layer of dark brown mud, a layer of packed tan earth, a layer of grey gravel, and at the bottom a layer of amber and blue rock whose cracks and pores are filled with blue water.",
+   "name": null,
+   "of": null,
+   "motion": null,
+   "sings": false
+  },
+  {
+   "id": "heat_icon",
+   "kind": "icon",
+   "look": "Three wavy orange-yellow heat lines pointing downward.",
+   "name": null,
+   "of": null,
+   "motion": null,
+   "sings": false
+  },
+  {
+   "id": "cold_icon",
+   "kind": "icon",
+   "look": "A pale blue-white swirl of cold air.",
+   "name": null,
+   "of": null,
+   "motion": null,
+   "sings": false
+  },
+  {
+   "id": "lake_wisps",
+   "kind": "object",
+   "look": "A small round blue lake with grassy banks and faint shimmering pale-cyan wisps of water vapor rising from its surface.",
+   "name": null,
+   "of": null,
+   "motion": "wisps waver upward",
+   "sings": false
+  },
+  {
+   "id": "river_wisps",
+   "kind": "object",
+   "look": "A short winding blue river between grassy banks with faint shimmering pale-cyan wisps of water vapor rising from its surface.",
+   "name": null,
+   "of": null,
+   "motion": "water flows, wisps waver upward",
+   "sings": false
+  },
+  {
+   "id": "bird",
+   "kind": "object",
+   "look": "A small white seagull with grey wings and a yellow beak, flying with wings spread.",
+   "name": null,
+   "of": null,
+   "motion": "wings flap",
+   "sings": false
+  },
+  {
+   "id": "cloud_droplets",
+   "kind": "object",
+   "look": "A loose clump of many tiny round pale-blue liquid water droplets crowding together in a soft cloud shape.",
+   "name": "condensation",
+   "of": null,
+   "motion": "droplets jostle closer together",
+   "sings": false
+  },
+  {
+   "id": "white_cloud",
+   "kind": "object",
+   "look": "A puffy bright white cumulus cloud with soft rounded bumps.",
+   "name": null,
+   "of": null,
+   "motion": "drifts slowly",
+   "sings": false
+  },
+  {
+   "id": "droplets_merging",
+   "kind": "object",
+   "look": "A few tiny round blue water droplets bumping into one bigger round blue drop and merging with it.",
+   "name": null,
+   "of": null,
+   "motion": "small drops bump in and merge",
+   "sings": false
+  },
+  {
+   "id": "precip_cloud",
+   "kind": "object",
+   "look": "A heavy blue-grey cloud with raindrops, white snowflakes and small clear ice pellets falling from its flat underside.",
+   "name": "precipitation",
+   "of": null,
+   "motion": "rain, snow and sleet keep falling",
+   "sings": false
+  },
+  {
+   "id": "river_to_ocean",
+   "kind": "object",
+   "look": "A blue river flowing down between green banks and emptying into the blue ocean at a sandy shore.",
+   "name": "collection",
+   "of": null,
+   "motion": "water flows into the sea",
+   "sings": false
+  },
+  {
+   "id": "dinosaur_river",
+   "kind": "object",
+   "look": "A long-necked green sauropod dinosaur bending its head down to drink from a blue river between ferny banks.",
+   "name": null,
+   "of": null,
+   "motion": "head dips to sip",
+   "sings": false
+  },
+  {
+   "id": "globe_cycle",
+   "kind": "object",
+   "look": "The round Earth globe with blue oceans and green land, faint wisps rising from the oceans, white clouds above them, rain falling over the land and blue rivers flowing back to the sea.",
+   "name": null,
+   "of": null,
+   "motion": "turns slowly while rain falls and wisps rise",
+   "sings": false
+  },
+  {
+   "id": "child_drinking",
+   "kind": "object",
+   "look": "A child in a yellow T-shirt holding a clear glass of water up to drink beside a silver kitchen tap running water into a sink.",
+   "name": null,
+   "of": null,
+   "motion": "raises the glass and sips",
+   "sings": false
+  },
+  {
+   "id": "washing_line_shirt",
+   "kind": "object",
+   "look": "A wet blue T-shirt pegged on a washing line between two poles, with faint shimmering pale-cyan wisps of water vapor rising from it.",
+   "name": null,
+   "of": null,
+   "motion": "shirt sways, wisps rise",
+   "sings": false
+  },
+  {
+   "id": "wade_ice_pellet",
+   "kind": "performer",
+   "look": "Wade frozen into a small, hard, perfectly round bead of clear see-through pale-blue ice, like a glass marble, with thin white frost cracks inside and a sharp white gleam on one side, and Wade's big expressive dark eyes on its front. A smooth solid icy ball with a simple round outline.",
+   "name": null,
+   "of": "wade_drop",
+   "motion": "tumbles as it drops",
+   "sings": false
+  }
+ ],
+ "beats": [
+  {
+   "beat": "b01",
+   "background": "bg_ocean",
+   "actions": [
+    {
+     "verb": "show",
+     "drawing": "wade_drop",
+     "to": null,
+     "pos": "center",
+     "scale": null,
+     "text": null,
+     "at": 0.5,
+     "until": null
+    },
+    {
+     "verb": "zoom",
+     "drawing": "wade_drop",
+     "to": null,
+     "pos": null,
+     "scale": 0.6,
+     "text": null,
+     "at": 0.5,
+     "until": 0.6
+    },
+    {
+     "verb": "zoom",
+     "drawing": "wade_drop",
+     "to": null,
+     "pos": null,
+     "scale": 1.0,
+     "text": null,
+     "at": 1.0,
+     "until": 4.0
+    },
+    {
+     "verb": "show",
+     "drawing": "heat_icon",
+     "to": null,
+     "pos": "left",
+     "scale": null,
+     "text": null,
+     "at": 4.5,
+     "until": null
+    },
+    {
+     "verb": "zoom",
+     "drawing": "wade_drop",
+     "to": null,
+     "pos": null,
+     "scale": 1.2,
+     "text": null,
+     "at": 7.5,
+     "until": 9.0
+    }
+   ],
+   "start": 0.0,
+   "end": 9.48,
+   "type": "music"
+  },
+  {
+   "beat": "b02",
+   "background": "bg_ocean",
+   "actions": [
+    {
+     "verb": "highlight",
+     "drawing": "heat_icon",
+     "to": null,
+     "pos": null,
+     "scale": null,
+     "text": null,
+     "at": 9.48,
+     "until": 10.2
+    },
+    {
+     "verb": "lipsync",
+     "drawing": "wade_drop",
+     "to": null,
+     "pos": null,
+     "scale": null,
+     "text": null,
+     "at": 9.48,
+     "until": 10.2
+    },
+    {
+     "verb": "swap",
+     "drawing": "wade_drop",
+     "to": "wade_stretch",
+     "pos": null,
+     "scale": null,
+     "text": null,
+     "at": 10.2,
+     "until": null
+    },
+    {
+     "verb": "lipsync",
+     "drawing": "wade_stretch",
+     "to": null,
+     "pos": null,
+     "scale": null,
+     "text": null,
+     "at": 10.2,
+     "until": 11.36
+    },
+    {
+     "verb": "swap",
+     "drawing": "wade_stretch",
+     "to": "wade_wisp",
+     "pos": null,
+     "scale": null,
+     "text": null,
+     "at": 11.36,
+     "until": null
+    },
+    {
+     "verb": "keyword",
+     "drawing": null,
+     "to": null,
+     "pos": null,
+     "scale": null,
+     "text": "evaporate",
+     "at": 11.36,
+     "until": 13.36
+    },
+    {
+     "verb": "move",
+     "drawing": "wade_wisp",
+     "to": null,
+     "pos": "top",
+     "scale": null,
+     "text": null,
+     "at": 11.6,
+     "until": 13.6
+    }
+   ],
+   "start": 9.48,
+   "end": 13.76,
+   "type": "hero"
+  }
+ ],
+ "gaps": [
+  "b04: Wade grows heavy beside a loose droplets_merging over the open landscape, with no cloud around him, so the drop is never seen falling out of a cloud; stage it on bg_cloud_inside or with precip_cloud at the top, and have Wade fall from its underside after the merge. The same fix applies to b13 and b23.",
+  "b04: the ring shows the vapor stage twice (wade_wisp and wade_eyes) and has no liquid-water starting stage, so river_to_ocean does not visibly lead back to evaporation; replace wade_eyes with wade_drop as the first stage (wade_drop, wade_wisp, cloud_droplets, precip_cloud, river_to_ocean). Repeat this in b13 and b23.",
+  "b18: the 'Billions' figure is drawn while dinosaur_river fills the screen, so children would believe dinosaurs lived billions of years ago; show 'Billions' over globe_cycle or the present-day river_to_ocean, and bring in dinosaur_river only after the figure is gone.",
+  "b18: the same whole wade_drop stands unchanged beside the dinosaurs and again beside today's river, which teaches that one drop stays together for billions of years; show the drop splitting and rejoining (swap to droplets_merging and back) between the dinosaur river and the present-day river.",
+  "b07: wisps are shown rising only from Wade, the lake and the river, never from the wide ocean itself as the hint asks; bring in globe_cycle or the ocean wisps briefly so children see that the ocean, lakes and rivers all evaporate at once."
+ ],
+ "model": "claude-opus-5-5",
+ "prompt_version": "storyboard.v24"
+}

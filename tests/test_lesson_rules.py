@@ -1,10 +1,12 @@
 import pytest
 
-from src.schema.lesson.lesson_schema import GradeBand, KeyTerm, LessonDraft, LessonLine, LineTag, VideoType
+from src.schema.lesson.lesson_schema import (GradeBand, KeyTerm, LessonDraft, LessonLine, LessonSequence, LineTag,
+                                             VideoType)
 from src.schema.song.song_analysis_schema import LyricLine
-from src.service.lesson.lesson_prompt import user_prompt
-from src.service.lesson.lesson_rules import (allowed_types, band_for, band_rules, face_limit, format_rules, problems,
-                                             repeats)
+from src.service.lesson.lesson_prompt import jamwise_direction, sequence_limit, user_prompt
+from src.service.lesson.lesson_rules import (allowed_types, band_for, band_rules, clear_keywords, face_limit,
+                                             format_rules, problems, repeats, scene_notes, sequence_problems,
+                                             chorus_lines, sing_the_chorus)
 
 LINES = [LyricLine(index=i, text=t, start=i, end=i + 1, confidence=0.9, unclear=(i == 2))
          for i, t in enumerate(["This is a colony.", "In 1858 it grew.", "Mumble words.", "Sing it with me!"])]
@@ -16,7 +18,9 @@ def draft(**changes) -> LessonDraft:
                 lines=[LessonLine(index=0, teaches="t", show="s", tag=LineTag.ILLUSTRATE),
                        LessonLine(index=1, teaches="t", show="s", tag=LineTag.NUMBER, number_text="1858"),
                        LessonLine(index=2, teaches="t", show="s", tag=LineTag.UNCLEAR),
-                       LessonLine(index=3, teaches="t", show="s", tag=LineTag.FACE_TO_CAMERA)])
+                       LessonLine(index=3, teaches="t", show="s", tag=LineTag.FACE_TO_CAMERA)],
+                sequences=[LessonSequence(first_line=0, last_line=3, topic="t", place="p", change="c",
+                                          fact="A colony grows.", steps=["A colony spreads"])])
     return LessonDraft(**{**base, **changes})
 
 
@@ -78,12 +82,136 @@ CHORUS = [LyricLine(index=i, text=t, start=i, end=i + 1, confidence=0.9, section
                                       (None, "Cells split."), (None, "Cells split.")])]
 
 
-def test_a_chorus_sung_again_must_look_the_same():
+def test_a_chorus_sung_again_keeps_its_tag_but_shows_something_new():
     assert repeats(CHORUS) == {2: 0}                               # untagged repeats don't count
     lines = [LessonLine(index=i, teaches="t", show="s", tag=LineTag.ILLUSTRATE) for i in range(5)]
-    lesson = draft(lines=lines)
-    assert problems(lesson, CHORUS, GradeBand.G3_5, allowed_types(GradeBand.G3_5, None)) == []
+    whole = [LessonSequence(first_line=0, last_line=4, topic="t", place="p", change="c", fact="f", steps=["a"])]
     lines[2].show = "a different scene"
-    found = problems(draft(lines=lines), CHORUS, GradeBand.G3_5, allowed_types(GradeBand.G3_5, None))
-    assert found == ["line 2 repeats line 0; give it the same teaches, show and tag"]
+    lesson = draft(lines=lines, sequences=whole)
+    assert problems(lesson, CHORUS, GradeBand.G3_5, allowed_types(GradeBand.G3_5, None)) == []
+    lines[2].tag = LineTag.FACE_TO_CAMERA
+    found = problems(draft(lines=lines, sequences=whole), CHORUS, GradeBand.G3_5, allowed_types(GradeBand.G3_5, None))
+    assert found == ["line 2 repeats line 0; give it the same tag"]
     assert "2. [2.0-3.0s] [chorus] [repeat of 0] sing it!" in user_prompt(CHORUS, GradeBand.G3_5, [VideoType.CONCEPT], None)
+
+
+def test_a_jamwise_songs_chorus_is_what_its_singer_sings_however_long_it_is():
+    song = [LyricLine(index=i, text=f"line {i}", start=i, end=i + 1, confidence=0.9, section=s)
+            for i, s in enumerate((["chorus"] * 4 + ["verse"] * 2) * 3)]
+    lines = [LessonLine(index=i, teaches="t", show="s", tag=LineTag.ILLUSTRATE) for i in range(18)]
+    lines[4].tag, lines[0].tag, lines[0].number_text = LineTag.FACE_TO_CAMERA, LineTag.NUMBER, "0"
+    lesson = draft(lines=lines)
+    sing_the_chorus(lesson, chorus_lines(song))
+    assert [e.index for e in lesson.lines if e.tag == LineTag.FACE_TO_CAMERA] == [0, 1, 2, 3, 6, 7, 8, 9, 12, 13, 14, 15]
+    assert lesson.lines[4].tag == LineTag.ILLUSTRATE and lesson.lines[0].number_text is None
+    types = allowed_types(GradeBand.G3_5, None)
+    assert any("face_to_camera" in p for p in problems(lesson, song, GradeBand.G3_5, types))
+    assert not any("face_to_camera" in p for p in problems(lesson, song, GradeBand.G3_5, types, chorus=True))
+    prompt = user_prompt(song, GradeBand.G3_5, types, None, "The plan.")
+    assert "tag every [chorus] line face_to_camera and no other line" in prompt and "At most" not in prompt.split("Allowed video types")[1].split("The plan.")[0]
+    assert "face_to_camera lines." in user_prompt(song, GradeBand.G3_5, types, None)
+
+
+def test_a_sequence_says_what_it_shows_in_steps_that_fit_its_length():
+    long = [LyricLine(index=i, text="Cells split.", start=i * 4.0, end=i * 4.0 + 3.8, confidence=0.9) for i in range(3)]
+    lines = [LessonLine(index=i, teaches="t", show="s", tag=LineTag.ILLUSTRATE) for i in range(3)]
+    sequence = lambda **c: [LessonSequence(**{**dict(first_line=0, last_line=2, topic="t", place="p", change="c",
+                                                     fact="A cell splits in two.", steps=["a", "b"]), **c})]
+    check = lambda seqs: sequence_problems(draft(lines=lines, sequences=seqs), long, [])
+    assert check(sequence()) == []
+    assert check(sequence(fact=" ")) == ["sequence 0-2 needs a fact: what a viewer must understand from it"]
+    for steps in (["a"], list("abcde")):
+        assert check(sequence(steps=steps)) == [f"sequence 0-2 has {len(steps)} steps; give 2 to 4 visible steps, "
+                                                "each at least 2.5 s of its 11.8 s"]
+    short = sequence(last_line=0, steps=["a", "b"])                  # 3.8 s: room for one step only
+    assert sequence_problems(draft(lines=lines[:1], sequences=short), long[:1], []) == [
+        "sequence 0-0 has 2 steps; give 1 to 1 visible steps, each at least 2.5 s of its 3.8 s"]
+
+
+def test_the_jamwise_plan_gives_the_lesson_its_facts_terms_and_demonstrations():
+    export = {"contentPackage": {
+        "learningObjectives": ["Explain fusion"],
+        "keyFacts": [{"fact": "F.", "kidVersion": "The Sun is a ball of gas.", "explanation": "Gravity holds it.",
+                      "misconception": "It burns like a campfire."}],
+        "vocabularyCards": [{"term": "corona", "kidDefinition": "The Sun's outer layer.", "nonExamples": ["sunspot"]}],
+        "wowFact": {"fact": "So much energy."}},
+        "creativeBrief": {"teachingMoments": [{"concept": "Fusion vs burning", "visualDemonstration": "Candle beside it"}],
+                          "featuredTerms": [{"word": "corona"}],
+                          "cast": [{"name": "Vex", "role": "lead", "concept": "The Sun itself",
+                                    "visualDescription": "A lean figure"}],
+                          "scenes": [{"id": i, "title": "The Core", "place": "Inside the Sun", "situation": "Atoms slam.",
+                                      "visualDescription": "White heat.", "teaches": "Fusion makes helium",
+                                      "teachingMoment": {"visualDemonstration": "Two atoms join"}} for i in range(1, 7)],
+                          "sectionPlans": [{"section": "verse1", "narrativeGoal": "Into the core (Scene 1)",
+                                            "educationalFocus": "fusion"}],
+                          "visualWorld": {"chorusVisual": "The Sun blazing"}, "loopVisual": "Back to the black void"},
+        "sections": [{"type": "chorus"}, {"type": "verse"}, {"type": "chorus"}, {"type": "chorus"}]}
+    text = jamwise_direction(export)
+    assert sequence_limit(export) == 9 and sequence_limit({}) == 8        # six scenes and three choruses
+    for part in ("- In the plan, Vex stands for: The Sun itself", "This song may use up to 9 sequences.",
+                 "- Scene 1: The Core. Place: Inside the Sun. Happens: Atoms slam. Seen: White heat. Shows the "
+                 "idea: Two atoms join Teaches: Fusion makes helium",
+                 "- Section verse1: Into the core (Scene 1) Teaches: fusion", "- Chorus picture: The Sun blazing",
+                 "- Ending picture: Back to the black void",
+                 "- Learning goal: Explain fusion", "- Fact: The Sun is a ball of gas. Gravity holds it.",
+                 "- Wrong idea to avoid: It burns like a campfire.",
+                 "- Term corona: The Sun's outer layer. Not to be confused with: sunspot",
+                 "- How to show Fusion vs burning: Candle beside it", "- Wow fact: So much energy.",
+                 "- Featured terms: corona"):
+        assert part in text
+
+
+def test_a_shown_term_must_be_a_defined_key_term():
+    lines = [LessonLine(index=i, teaches="t", show="s", tag=LineTag.ILLUSTRATE) for i in range(4)]
+    seq = lambda shown: [LessonSequence(first_line=0, last_line=3, topic="t", place="p", change="c", fact="f",
+                                        steps=["a"], shown_terms=shown)]
+    plain = [LyricLine(index=i, text="Cells split.", start=i, end=i + 1, confidence=0.9) for i in range(4)]
+    assert sequence_problems(draft(lines=lines, sequences=seq(["Colony"])), plain, []) == []
+    assert sequence_problems(draft(lines=lines, sequences=seq(["corona"])), plain, []) == [
+        "sequence 0-3 shows terms ['corona'] that are not in key_terms; define them there or leave them out"]
+
+
+def test_steps_fit_the_band_shot_length_and_places_fit_the_band_limit():
+    long = [LyricLine(index=i, text="Cells split.", start=i * 4.0, end=i * 4.0 + 3.8, confidence=0.9) for i in range(3)]
+    lines = [LessonLine(index=i, teaches="t", show="s", tag=LineTag.ILLUSTRATE) for i in range(3)]
+    seq = lambda **c: LessonSequence(**{**dict(first_line=0, last_line=2, topic="t", place="p", change="c", fact="f",
+                                              steps=["a", "b"]), **c})
+    assert sequence_problems(draft(lines=lines, sequences=[seq()]), long, [], GradeBand.G6_8) == []
+    assert sequence_problems(draft(lines=lines, sequences=[seq(steps=list("abcd"))]), long, [], GradeBand.K_2) == [
+        "sequence 0-2 has 4 steps; give 1 to 1 visible steps, each at least 6.0 s of its 11.8 s"]   # K-2 shots are 6 s
+    three = [seq(last_line=0, place="a", steps=["x"]), seq(first_line=1, last_line=1, place="b", steps=["x"]),
+             seq(first_line=2, place="c", steps=["x"])]
+    found = sequence_problems(draft(lines=lines, sequences=three), long, [], GradeBand.K_2)
+    assert any(p.startswith("the sequences use 3 places ['a', 'b', 'c']; at most 2 for grades k-2") for p in found)
+    assert "Sequences use at most 2 places between them; each step lasts at least 6.0 s." in user_prompt(
+        long, GradeBand.K_2, [VideoType.CONCEPT], None)
+
+
+def test_a_fact_may_rest_on_a_figure_only_when_a_line_is_a_number_line():
+    long = [LyricLine(index=i, text="In 1858 it grew.", start=i * 4.0, end=i * 4.0 + 3.8, confidence=0.9) for i in range(3)]
+    plain = [LessonLine(index=i, teaches="t", show="s", tag=LineTag.ILLUSTRATE) for i in range(3)]
+    numbered = [plain[0], LessonLine(index=1, teaches="t", show="s", tag=LineTag.NUMBER, number_text="1858"), plain[2]]
+    seq = [LessonSequence(first_line=0, last_line=2, topic="t", place="p", change="c", steps=["a", "b"],
+                          fact="The colony was first seen in 1858.")]
+    assert sequence_problems(draft(lines=numbered, sequences=seq), long, []) == []
+    assert sequence_problems(draft(lines=plain, sequences=seq), long, [])[0].startswith(
+        "sequence 0-2's fact leans on a figure, but none of its lines is a number line")
+
+
+def test_a_keyword_is_kept_only_when_its_own_clear_line_sings_it():
+    plan = draft()
+    for entry, word in zip(plan.lines, ["Colony", "bacteria", "Mumble", "sing it with me now"]):
+        entry.keyword = word
+    dropped = clear_keywords(plan, LINES)
+    assert [e.keyword for e in plan.lines] == ["Colony", None, None, None]      # not sung, unclear line, too long
+    assert len(dropped) == 3 and dropped[0].startswith("line 1: keyword 'bacteria' dropped")
+
+
+def test_sequences_that_leave_the_plans_scenes_are_noted():
+    def built(*scenes) -> LessonDraft:
+        return draft(sequences=[draft().sequences[0].model_copy(update={"scenes": list(s)}) for s in scenes])
+    assert scene_notes(built([1], [], [2, 3]), [1, 2, 3]) == []                    # a chorus has none; two may join
+    assert scene_notes(built([2], [1], [3]), [1, 2, 3]) == [
+        "the sequences take the plan's scenes in the order [2, 1, 3], not the plan's [1, 2, 3]"]
+    notes = scene_notes(built([1], [7]), [1, 2])
+    assert "scene 7, which the plan does not have" in notes[0] and notes[1].endswith("scene(s) [2]")

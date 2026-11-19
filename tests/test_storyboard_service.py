@@ -1,15 +1,17 @@
+import json
+
 import pytest
 from dependency_injector import providers
 
 from src.core.container import Container
-from src.schema.enums import StageName, StageStatus
-from src.schema.lesson.lesson_schema import GradeBand, LessonLine, LessonPlan, LineTag, VideoType
+from src.schema.enums import FilmType, StageName, StageStatus
+from src.schema.lesson.lesson_schema import GradeBand, LessonLine, LessonPlan, LessonSequence, LineTag, VideoType
 from src.schema.run.run_schema import Run
 from src.schema.run.stage_state_schema import StageState
-from src.schema.song.song_analysis_schema import LyricLine, SongAnalysis
+from src.schema.song.song_analysis_schema import LyricLine, SongAnalysis, TimedWord
 from src.schema.song.song_schema import Song, SongStatus
 from src.schema.storyboard.storyboard_schema import Continuity, Position
-from src.service.llm.llm_service import ProviderReply
+from src.service.llm.llm_service import LlmError, ProviderReply
 
 LINES = [LyricLine(index=i, text=t, start=i * 4, end=i * 4 + 3.8, confidence=0.9)
          for i, t in enumerate(["This is a colony.", "In 1858 it grew.", "It fills the dish."])]
@@ -20,16 +22,28 @@ def shot(slot, size="medium", action="The colony spreads across the dish"):
     return {"slot": slot, "place": "dish", "subjects": ["colony"], "size": size, "angle": "high",
             "position": "centre", "start_state": "A small teal colony sits in a clear dish", "action": action,
             "end_state": "The colony covers half the dish", "camera": {"move": "push_in", "speed": "slow"},
-            "motion": "low", "screen_direction": "none", "transition_in": "cut"}
+            "motion": "low", "screen_direction": "none", "transition_in": "cut", "step": 1}
 
 
-def board(*shots, cast=None):
+def header(cast=None, sequence_places=("dish",)):
     return {"shape": "From one colony to a full dish", "motifs": [],
+            "sequence_places": [{"home": p} for p in sequence_places],
             "cast": cast or [{"id": "colony", "kind": "thing", "look": "A teal bacterial colony", "size": "a few mm",
                               "scale": "object"}],
             "places": [{"id": "dish", "look": "A clear glass petri dish on a white bench", "lighting": "soft daylight",
-                        "scale": "object", "walkable": True, "host_outfit": "science_club"}],
-            "shots": list(shots) or [shot("s01", size="wide"), shot("s02"), shot("s03")]}
+                        "scale": "object", "walkable": True, "host_outfit": "science_club"}]}
+
+
+def sequence(*shots):
+    return {"shots": list(shots) or [shot("s01", size="wide"), shot("s02"), shot("s03")]}
+
+
+def sound_off(*clear):
+    """The viewer's two replies: what each sequence teaches with the sound off, then whether it is clear."""
+    clear = clear or (True,)
+    return ({"sequences": [{"sequence": k + 1, "learned": "A colony grows across a dish."} for k in range(len(clear))]},
+            {"sequences": [{"sequence": k + 1, "clear": c, "missing": "" if c else "how the colony grows"}
+                           for k, c in enumerate(clear)]})
 
 
 class FakeClaude:
@@ -57,7 +71,9 @@ def run(container: Container) -> Run:
                       type_reason="r", key_terms=[], must_not_teach=[], grade_band=GradeBand.G3_5, model="m",
                       prompt_version="v", lines=[LessonLine(index=i, teaches="t", show="s", tag=tag,
                                                             number_text="1858" if tag == LineTag.NUMBER else None)
-                                                 for i, tag in enumerate(TAGS)])
+                                                 for i, tag in enumerate(TAGS)],
+                      sequences=[LessonSequence(first_line=0, last_line=2, topic="t", place="p", change="c",
+                                                fact="A colony grows to fill its dish.", steps=["The colony spreads"])])
     runs.stage_states.add(StageState(run_id=run.id, stage=StageName.LESSON, status=StageStatus.DONE,
                                      output=plan.model_dump(mode="json")))
     return run
@@ -69,69 +85,103 @@ def storyboard(container: Container, claude: FakeClaude):
 
 
 def test_a_board_is_cut_written_fixed_stored_and_costed(container, run):
-    claude = FakeClaude(board())
+    claude = FakeClaude(header(), sequence(), *sound_off())
     result = storyboard(container, claude).run(run.id)
     assert [s.id for s in result.shots] == ["s01", "s02", "s03"] and result.cast[0].id == "host"
     assert result.shots[1].number_text == "1858" and result.shots[1].position == Position.RIGHT_THIRD
     assert result.shots[1].continuity == Continuity.SAME_PLACE
-    assert "s02 | 4.0-8.0s" in claude.prompts[0] and "code draws 1858" in claude.prompts[0]
+    assert "No shots yet" in claude.prompts[0] and "Now write sequence 1 of 1" in claude.prompts[1]
+    assert "s02 | 4.0-8.0s" in claude.prompts[1] and "code draws 1858" in claude.prompts[1]
     state = container.run_repository().stage(run.id, StageName.STORYBOARD)
-    assert state.status == StageStatus.DONE and container.asset_repository().run_cost(run.id) == pytest.approx(0.05)
+    assert state.status == StageStatus.DONE and container.asset_repository().run_cost(run.id) == pytest.approx(0.20)
 
 
-def test_only_the_failing_shot_is_re_asked(container, run):
-    claude = FakeClaude(board(shot("s01", size="wide"), shot("s02", action="A label appears on the dish"), shot("s03")),
-                        {"shots": [shot("s02")]})
+def test_a_failing_sequence_is_re_asked_whole(container, run):
+    claude = FakeClaude(header(), sequence(shot("s01", size="wide"), shot("s02", action="A label appears on the dish"),
+                                           shot("s03")), sequence(), *sound_off())
     result = storyboard(container, claude).run(run.id)
     assert result.shots[1].action == "The colony spreads across the dish"
-    assert "- s02:" in claude.prompts[1] and "- s01:" not in claude.prompts[1]
-    assert container.asset_repository().run_cost(run.id) == pytest.approx(0.10)
+    assert "- s02:" in claude.prompts[2] and "- s01:" not in claude.prompts[2]
+    assert "Return the whole answer again" in claude.prompts[2]
+    assert container.asset_repository().run_cost(run.id) == pytest.approx(0.25)
 
 
-def test_a_bad_cast_re_asks_the_whole_board(container, run):
+def test_a_bad_cast_re_asks_the_header(container, run):
     bad = [{"id": "host", "kind": "person", "look": "A man", "size": "tall", "scale": "human"}]
-    claude = FakeClaude(board(shot("s01", size="wide"), shot("s02"), shot("s03"), cast=bad), board())
+    claude = FakeClaude(header(cast=bad), header(), sequence(), *sound_off())
     storyboard(container, claude).run(run.id)
-    assert len(claude.prompts) == 2 and "'host' is given" in claude.prompts[1]
+    assert len(claude.prompts) == 5 and "'host' is given" in claude.prompts[1]
 
 
-def test_it_gives_up_after_two_re_asks_and_records_the_reasons(container, run):
-    bad = shot("s02", action="A label appears on the dish")
-    claude = FakeClaude(board(shot("s01", size="wide"), bad, shot("s03")), {"shots": [bad]}, {"shots": [bad]})
-    with pytest.raises(ValueError, match="still has problems"):
+def test_every_sequence_needs_a_declared_place(container, run):
+    claude = FakeClaude(header(sequence_places=()), header(), sequence(), *sound_off())
+    storyboard(container, claude).run(run.id)
+    assert "exactly 1 entries" in claude.prompts[1]
+
+
+def test_a_sequence_still_failing_after_two_re_asks_is_kept_with_a_note(container, run):
+    bad = sequence(shot("s01", size="wide"), shot("s02", action="A label appears on the dish"), shot("s03"))
+    claude = FakeClaude(header(), bad, bad, bad, *sound_off())
+    result = storyboard(container, claude).run(run.id)
+    state = container.run_repository().stage(run.id, StageName.STORYBOARD)
+    assert state.status == StageStatus.DONE and result.shots[1].action == "A label appears on the dish"
+    assert result.flags[0].startswith("sequence 1 kept after 3 tries with unresolved problems: s02: action mentions")
+    assert container.asset_repository().run_cost(run.id) == pytest.approx(0.30)
+
+
+def test_a_sequence_missing_a_shot_after_every_try_still_fails_the_stage(container, run):
+    short = sequence(shot("s01", size="wide"), shot("s02"))
+    claude = FakeClaude(header(), short, short, short)
+    with pytest.raises(LlmError, match="no valid answer"):
         storyboard(container, claude).run(run.id)
     state = container.run_repository().stage(run.id, StageName.STORYBOARD)
-    assert state.status == StageStatus.FAILED and "label" in state.error
-    assert [s["slot"] for s in state.output["draft"]["shots"]] == ["s01", "s02", "s03"]            # kept to inspect
-    assert "s02" in state.output["problems"]
-    assert container.asset_repository().run_cost(run.id) == pytest.approx(0.15)
+    assert state.status == StageStatus.FAILED and state.output["sequence"] == 1
 
 
 def test_the_same_inputs_reuse_the_board_and_a_lesson_is_required(container, run):
-    claude = FakeClaude(board(), board())
+    claude = FakeClaude(header(), sequence(), *sound_off(), header(), sequence(), *sound_off())
     service = storyboard(container, claude)
     service.run(run.id)
     service.run(run.id)
-    assert len(claude.prompts) == 1
+    assert len(claude.prompts) == 4
     service.run(run.id, force=True)
-    assert len(claude.prompts) == 2
+    assert len(claude.prompts) == 8
     other = container.run_repository().runs.add(Run(song_id=run.song_id, name="x", audience=GradeBand.G3_5))
     with pytest.raises(ValueError, match="lesson"):
         service.run(other.id)
 
 
-def test_a_slot_written_twice_is_fixed_by_the_patch(container, run):
-    claude = FakeClaude(board(shot("s01", size="wide"), shot("s02"), shot("s02"), shot("s03")), {"shots": [shot("s02")]})
+def test_a_slot_written_twice_is_re_asked(container, run):
+    claude = FakeClaude(header(), sequence(shot("s01", size="wide"), shot("s02"), shot("s02"), shot("s03")), sequence(),
+                        *sound_off())
     result = storyboard(container, claude).run(run.id)
-    assert [s.id for s in result.shots] == ["s01", "s02", "s03"] and len(claude.prompts) == 2
-    assert "more than one shot" in claude.prompts[1]
+    assert [s.id for s in result.shots] == ["s01", "s02", "s03"] and len(claude.prompts) == 5
+    assert "more than one shot" in claude.prompts[2]
 
 
 def test_shots_for_slots_that_do_not_exist_are_dropped(container, run):
     ghost = {**shot("s99"), "place": "nowhere"}
-    claude = FakeClaude(board(shot("s01", size="wide"), shot("s02"), shot("s03"), ghost))
+    claude = FakeClaude(header(), sequence(shot("s01", size="wide"), shot("s02"), shot("s03"), ghost), *sound_off())
     result = storyboard(container, claude).run(run.id)
-    assert [s.id for s in result.shots] == ["s01", "s02", "s03"] and len(claude.prompts) == 1
+    assert [s.id for s in result.shots] == ["s01", "s02", "s03"] and len(claude.prompts) == 4
+
+
+def test_each_sequence_is_written_after_the_ones_before_it_in_its_own_place(container, run):
+    runs = container.run_repository()
+    state = runs.stage(run.id, StageName.LESSON)
+    state.output["sequences"] = [{"first_line": 0, "last_line": 1, "topic": "Growth", "place": "p", "change": "c"},
+                                 {"first_line": 2, "last_line": 2, "topic": "Full dish", "place": "q", "change": "c"}]
+    runs.stage_states.update(state)
+    two = header(sequence_places=("dish", "bench"))
+    two["places"].append({"id": "bench", "look": "A white lab bench", "lighting": "soft daylight", "scale": "human",
+                          "walkable": True})
+    claude = FakeClaude(two, sequence(shot("s01", size="wide"), shot("s02")), sequence(shot("s03")),
+                        sequence({**shot("s03", size="wide"), "place": "bench", "subjects": []}), *sound_off(True, True))
+    result = storyboard(container, claude).run(run.id)
+    assert [s.place for s in result.shots] == ["dish", "dish", "bench"]
+    assert "leads into sequence 2, Full dish, in bench" in claude.prompts[1]
+    assert "Now write sequence 2 of 2" in claude.prompts[2] and '"slot":"s02"' in claude.prompts[2]
+    assert "is in its home 'bench', not 'dish'" in claude.prompts[3]
 
 
 def test_a_lesson_plan_older_than_the_analysis_is_refused(container, run):
@@ -150,8 +200,138 @@ def test_a_sung_shot_happens_in_a_walkable_place_in_the_chosen_kit(container, ru
     state = runs.stage(run.id, StageName.LESSON)
     state.output["lines"][2]["tag"] = "face_to_camera"
     runs.stage_states.update(state)
-    claude = FakeClaude(board(shot("s01", size="wide"), shot("s02"), {**shot("s03"), "subjects": ["host"]}))
+    claude = FakeClaude(header(), sequence(shot("s01", size="wide"), shot("s02"), {**shot("s03"), "subjects": ["host"]}),
+                        *sound_off())
     result = storyboard(container, claude).run(run.id)
     sung = result.shots[2]
     assert sung.kind == "sung" and sung.place == "dish" and sung.performer == "host"
     assert result.places[0].host_outfit == "science_club" and "Wardrobe kits: everyday:" in claude.prompts[0]
+
+
+def test_a_sequence_may_zoom_to_one_place_at_another_scale(container, run):
+    zoomed = header()
+    zoomed["places"].append({"id": "cells", "look": "Rod-shaped bacteria packed side by side", "lighting": "soft glow",
+                             "scale": "microscopic", "walkable": False})
+    flat = {**zoomed, "sequence_places": [{"home": "dish", "zooms": ["dish"]}]}
+    good = {**zoomed, "sequence_places": [{"home": "dish", "zooms": ["cells"]}]}
+    claude = FakeClaude(flat, good, sequence(shot("s01", size="wide"), shot("s02"),
+                                             {**shot("s03", size="wide"), "place": "cells", "subjects": [],
+                                              "transition_in": "dissolve"}), *sound_off())
+    result = storyboard(container, claude).run(run.id)
+    assert "zoom place 'dish' has the same scale as 'dish'" in claude.prompts[1] and "zooming to cells" in claude.prompts[2]
+    assert [s.place for s in result.shots] == ["dish", "dish", "cells"] and len(claude.prompts) == 5
+
+
+def test_a_sequence_shows_its_steps_in_order_and_labels_each_term_while_it_is_sung(container, run):
+    runs = container.run_repository()
+    state = runs.stage(run.id, StageName.LESSON)
+    state.output["sequences"][0].update(terms=["colony"], steps=["A colony appears", "It spreads"])
+    runs.stage_states.update(state)
+    wrong = sequence(shot("s01", size="wide"), shot("s02"), {**shot("s03"), "label": "colony"})
+    right = sequence({**shot("s01", size="wide"), "label": "colony"}, {**shot("s02"), "step": 2},
+                     {**shot("s03"), "step": 2})
+    claude = FakeClaude(header(), wrong, right, *sound_off())
+    result = storyboard(container, claude).run(run.id)
+    asked = claude.prompts[2]
+    assert "never shows step(s) [2]" in asked and "sequence 1 never labels ['colony']" in asked
+    assert "s03: label 'colony' is not sung during this slot" in asked
+    assert "fact: A colony grows to fill its dish. | steps: 1. A colony appears; 2. It spreads" in claude.prompts[1]
+    assert [(s.step, s.label) for s in result.shots] == [(1, "colony"), (2, None), (2, None)]
+    assert result.shots[0].position == Position.RIGHT_THIRD                  # code moves a label's subject aside
+
+
+def test_a_sequence_unclear_with_the_sound_off_is_rewritten(container, run):
+    better = sequence(shot("s01", size="wide"), shot("s02", action="The colony doubles across the dish"), shot("s03"))
+    claude = FakeClaude(header(), sequence(), *sound_off(False), better, *sound_off())
+    result = storyboard(container, claude).run(run.id)
+    watched = claude.prompts[2]
+    assert "This is a colony." not in watched and "On screen: 1858." in watched     # pictures only, no lyrics
+    assert "Fact to teach: A colony grows to fill its dish." in claude.prompts[3]
+    assert "watched with the sound off a viewer learns only" in claude.prompts[4]
+    assert result.shots[1].action == "The colony doubles across the dish"
+    assert "sound off: sequence 1 rewritten; it missed how the colony grows" in result.flags
+    assert len(claude.prompts) == 7 and "The colony doubles" in claude.prompts[5]      # the rewrite is watched again
+    assert not any("still unclear" in f for f in result.flags)
+
+
+def test_a_sequence_still_unclear_after_its_rewrite_is_noted(container, run):
+    better = sequence(shot("s01", size="wide"), shot("s02", action="The colony doubles across the dish"), shot("s03"))
+    claude = FakeClaude(header(), sequence(), *sound_off(False), better, *sound_off(False))
+    result = storyboard(container, claude).run(run.id)
+    assert "sound off: sequence 1 is still unclear after its rewrite; it misses how the colony grows" in result.flags
+
+
+def test_each_shot_is_given_its_own_words_and_a_shown_term_is_labelled_without_being_sung(container, run):
+    songs, runs = container.song_repository(), container.run_repository()
+    analysis = songs.analyses.get(songs.songs.get(run.song_id).analysis_id)
+    analysis.words = [TimedWord(index=i, line_index=0, text=t, start=0.5 + i, end=0.9 + i)
+                      for i, t in enumerate(["This", "is", "a", "colony."])]
+    songs.analyses.update(analysis)
+    state = runs.stage(run.id, StageName.LESSON)
+    state.output["sequences"][0].update(shown_terms=["biofilm"])
+    runs.stage_states.update(state)
+    unlabelled = sequence()
+    labelled = sequence(shot("s01", size="wide"), shot("s02"), {**shot("s03"), "label": "biofilm"})
+    claude = FakeClaude(header(), unlabelled, labelled, *sound_off())
+    result = storyboard(container, claude).run(run.id)
+    assert "s01 | 0.0-4.0s (4.0s) | picture | sings: This is a colony." in claude.prompts[1]
+    assert "| shown terms: biofilm |" in claude.prompts[1]
+    assert "sequence 1 never labels ['biofilm']" in claude.prompts[2] and result.shots[2].label == "biofilm"
+
+
+def test_a_sequence_may_zoom_closer_and_wider_but_not_twice_to_one_scale(container, run):
+    places = header()["places"] + [
+        {"id": "cells", "look": "Rod-shaped bacteria packed side by side", "lighting": "soft glow",
+         "scale": "microscopic", "walkable": False},
+        {"id": "lab", "look": "A long white lab bench under windows", "lighting": "daylight", "scale": "human",
+         "walkable": True},
+        {"id": "shelf", "look": "A steel shelf of stacked dishes", "lighting": "daylight", "scale": "human",
+         "walkable": True}]
+    twice = {**header(), "places": places, "sequence_places": [{"home": "dish", "zooms": ["lab", "shelf"]}]}
+    both = {**header(), "places": places, "sequence_places": [{"home": "dish", "zooms": ["cells", "lab"]}]}
+    claude = FakeClaude(twice, both, sequence(shot("s01", size="wide"), {**shot("s02", size="wide"), "place": "cells",
+                                                                      "subjects": [], "transition_in": "dissolve"},
+                                              {**shot("s03", size="wide"), "place": "lab", "subjects": [],
+                                               "transition_in": "dissolve"}), *sound_off())
+    result = storyboard(container, claude).run(run.id)
+    assert "zoom place 'shelf' has the same scale as 'lab'" in claude.prompts[1]
+    assert "zooming to cells and lab" in claude.prompts[2]
+    assert [s.place for s in result.shots] == ["dish", "cells", "lab"]
+
+
+def test_a_shot_at_night_needs_the_place_lit_for_night_declared_under_times(container, run):
+    night = {"id": "dish_night", "look": "The same petri dish on the bench under a desk lamp", "lighting": "night, one lamp",
+             "scale": "object", "walkable": True, "host_outfit": "science_club"}
+    hdr = {**header(), "places": header()["places"] + [night], "sequence_places": [{"home": "dish", "times": ["dish_night"]}]}
+    dark = {**shot("s03"), "start_state": "Night has fallen and the dish sits in lamplight"}
+    claude = FakeClaude(hdr, sequence(shot("s01", size="wide"), shot("s02"), dark),
+                        sequence(shot("s01", size="wide"), shot("s02"), {**dark, "place": "dish_night", "size": "wide"}),
+                        *sound_off())
+    result = storyboard(container, claude).run(run.id)
+    assert "also at other hours in dish_night" in claude.prompts[1]
+    assert "s03: the shot opens at night but 'dish' is lit 'soft daylight'" in claude.prompts[2]
+    assert [s.place for s in result.shots] == ["dish", "dish", "dish_night"]
+
+
+def test_a_narration_film_of_a_jamwise_song_uses_the_host(container, run, tmp_path):
+    (tmp_path / "jamwise.json").write_text(json.dumps({"result": {"lyrics": "x", "lineTiming": [{}]}}))
+    songs, runs = container.song_repository(), container.run_repository()
+    song = songs.songs.get(run.song_id)
+    song.audio_path = str(tmp_path / "a.mp3")
+    songs.songs.update(song)
+    state = runs.stage(run.id, StageName.LESSON)
+    state.output = {**state.output, "film_type": FilmType.NARRATION}
+    runs.stage_states.update(state)
+    result = storyboard(container, FakeClaude(header(), sequence(), *sound_off())).run(run.id)
+    assert result.cast[0].id == "host"
+
+
+def test_a_2d_run_is_refused_before_any_call(container, run):
+    runs = container.run_repository()
+    state = runs.stage(run.id, StageName.LESSON)
+    state.output = {"beats": []}
+    runs.stage_states.update(state)
+    claude = FakeClaude()
+    with pytest.raises(ValueError, match="is a 2d film"):
+        storyboard(container, claude).run(run.id)
+    assert claude.prompts == []

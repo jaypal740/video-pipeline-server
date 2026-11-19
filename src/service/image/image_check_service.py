@@ -85,11 +85,11 @@ class ImageCheckService:
 
     def problems(self, checklist: Checklist, brief: Brief) -> list[str]:
         """What fails the try."""
-        return checklist.problems(self._settings.image_pass_score, brief.fatal)
+        return checklist.problems(self._settings.image_pass_score, brief.rules, brief.fatal)
 
-    def notes(self, checklist: Checklist) -> list[str]:
+    def notes(self, checklist: Checklist, brief: Brief) -> list[str]:
         """Everything found wrong, failing or not."""
-        return checklist.notes(self._settings.image_pass_score)
+        return checklist.notes(self._settings.image_pass_score, brief.rules)
 
     @staticmethod
     def _fill_request(user: str, brief: Brief, gaps: list[str]) -> str:

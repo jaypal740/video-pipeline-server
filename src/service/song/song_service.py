@@ -4,6 +4,7 @@ from pathlib import Path
 from src.core.configs import Settings
 from src.repository.song.song_repository import SongRepository
 from src.schema.song.song_schema import Song
+from src.service.intake.intake_jamwise import JAMWISE_FILE, read_export
 from src.service.intake.intake_lyrics import clean_lyrics
 
 
@@ -15,17 +16,22 @@ class SongService:
         self._repo = song_repository
         self._settings = settings
 
-    def add(self, name: str, audio: Path, lyrics: str) -> Song:
+    def add(self, name: str, audio: Path, lyrics: str | None, jamwise: Path | None = None) -> Song:
+        """A JamWise song brings its lyrics and timing in its export, which is kept next to the audio."""
         if self._repo.songs.find_one(name=name) is not None:
             raise ValueError(f"A song named {name!r} already exists")
         if not Path(audio).is_file():
             raise ValueError(f"Audio file {audio} not found")
+        if jamwise is not None:
+            lyrics = read_export(jamwise)["lyrics"]
         if not clean_lyrics(lyrics):
             raise ValueError("The lyrics have no lines to align")
         song = Song(name=name, audio_path="", lyrics=lyrics)
         target = Path(self._settings.asset_dir) / "songs" / song.id / f"audio{Path(audio).suffix.lower()}"
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(audio, target)
+        if jamwise is not None:
+            shutil.copyfile(jamwise, target.parent / JAMWISE_FILE)
         song.audio_path = str(target.resolve())
         return self._repo.songs.add(song)
 

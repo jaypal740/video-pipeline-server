@@ -20,14 +20,15 @@ from src.service.image.image_check_service import ImageCheckService
 from src.service.lesson.lesson_rules import band_rules
 from src.service.llm.llm_service import LabelledImage, LlmCall, LlmService
 from src.service.keyframe.keyframe_prompt import (LINK_LABEL, START_LABEL, end_brief, end_prompt, keyframe_brief,
-                                                  keyframe_prompt, linked_brief, linked_prompt, ref_label, view_for)
-from src.service.sheet.sheet_prompt import PLATE, Style
+                                                  keyframe_prompt, linked_brief, linked_prompt, real_brief,
+                                                  real_prompt, ref_label, view_for)
+from src.service.sheet.sheet_prompt import PLATE, REAL, Style
 from src.service.image.image_prices import image_model
 from src.service.sheet.sheet_service import USABLE, SheetService
-from src.service.stage.stage_common import (PASSED, StopLoss, add_cost, asset_url, keep_best, storyboard_of,
+from src.service.stage.stage_common import (PASSED, StopLoss, add_cost, asset_urls, keep_best, storyboard_of,
                                             write_correction)
 from src.service.storage.storage_service import Storage
-from src.service.storyboard.storyboard_rules import HOST
+from src.service.storyboard.storyboard_rules import HOST, real_shots
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,8 @@ class Plan(NamedTuple):
 
 def chains_of(shots: list[Shot]) -> list[list[Shot]]:
     """Runs of shots that carry on from each other: the same place, shot after shot. A new scene, a sung
-    shot (its own picture, for lip-sync) or a chorus repeat starts a new chain; a repeat is in none."""
+    shot (its own picture: the host for lip-sync, or real footage of what its line names) or a chorus repeat
+    starts a new chain; a repeat is in none."""
     chains: list[list[Shot]] = []
     prev: Shot | None = None
     for shot in shots:
@@ -71,10 +73,10 @@ def chains_of(shots: list[Shot]) -> list[list[Shot]]:
     return chains
 
 
-def needs_end(shot: Shot) -> bool:
+def needs_end(shot: Shot, real: bool = False) -> bool:
     """A shot gets an ending picture when something in it changes; a sung shot is animated by lip-sync and a
-    camera shot by code, from the opening alone."""
-    return shot.kind != ShotKind.SUNG and shot.moves == Moves.SUBJECT
+    camera shot by code, from the opening alone. real: a sung shot filmed as real footage changes like any other."""
+    return real or (shot.kind != ShotKind.SUNG and shot.moves == Moves.SUBJECT)
 
 
 def same_framing(prev: Shot, shot: Shot) -> bool:
@@ -127,12 +129,16 @@ class KeyframeService:
         style, model = Style.of(band_rules(board.grade_band)), self._settings.keyframe_model
         cast = {c.id: c for c in board.cast}
         places = {p.id: p for p in board.places}
+        self._real = real_shots(board.cast, board.shots)           # sung shots the singer is laid over
         chains = chains_of(board.shots)
         parts = [model, ";".join(",".join(s.id for s in chain) for chain in chains)]
         for shot in (s for chain in chains for s in chain):
+            if shot.id in self._real:                               # drawn from words: no sheet decides it
+                parts.append(f"{shot.id}:{real_prompt(shot, places[shot.place])}:{end_prompt(REAL, shot, [])}")
+                continue
             subjects, refs = [cast[s] for s in shot.subjects], self._refs_for(shot, cast, sheets)
             parts.append(f"{shot.id}:{keyframe_prompt(style, shot, places[shot.place], subjects)}:"
-                         f"{linked_prompt(style, shot, subjects)}:{end_prompt(style, shot) if needs_end(shot) else ''}:"
+                         f"{linked_prompt(style, shot, subjects)}:{end_prompt(style, shot, subjects) if needs_end(shot) else ''}:"
                          f"{','.join(r.sha256 for r in refs) if refs else 'blocked'}")
         key = hashlib.sha256("|".join(parts).encode()).hexdigest()
 
@@ -209,7 +215,8 @@ class KeyframeService:
             if asset.review in PASSED:
                 continue
             shot = shots[asset.target_id]
-            brief = keyframe_brief(shot, places[shot.place], [cast[s] for s in shot.subjects])
+            brief = (real_brief(shot, places[shot.place]) if shot.id in real_shots(board.cast, board.shots)
+                     else keyframe_brief(shot, places[shot.place], [cast[s] for s in shot.subjects]))
             refs = [self._assets.assets.get(r) for r in asset.params["refs"]]
             labelled = [LabelledImage(label=ref_label(kind, name), data=self._storage.get(r.path))
                         for (kind, name), r in zip([('place', shot.place), *(('cast member', s) for s in shot.subjects)], refs)]
@@ -249,7 +256,7 @@ class KeyframeService:
         asset.params = {**asset.params, "score": checklist.score, "judged_by": model,
                         "asked_for": [a.model_dump() for a in checklist.asked_for]}
         asset.review = ReviewState.PASSED if not problems else ReviewState.FAILED
-        asset.review_notes = "\n".join(self._check.notes(checklist)) or None
+        asset.review_notes = "\n".join(self._check.notes(checklist, brief)) or None
         self._assets.assets.update(asset)
         logger.info("keyframe %s try %d rechecked by %s: %s, %d/10", asset.target_id, asset.params["try"], model,
                     asset.review, checklist.score)
@@ -300,11 +307,18 @@ class KeyframeService:
         while i < len(chain):
             shot = chain[i]
             subjects = [cast[s] for s in shot.subjects]
+            real = shot.id in self._real
             if view == END:
-                if shot.id in made and needs_end(shot):
+                if shot.id in made and needs_end(shot, real):
                     p[1], p[2] = i, END
-                    return Plan(f"{shot.id}:end", shot, END, end_prompt(style, shot), [made[shot.id]], [START_LABEL],
-                                end_brief(shot))
+                    if real:
+                        return Plan(f"{shot.id}:end", shot, END, end_prompt(REAL, shot, []), [made[shot.id]],
+                                    [START_LABEL], end_brief(shot, []))
+                    own = (self._refs_for(shot, cast, sheets) or [None])[1:]    # the subjects' sheets, after image 1
+                    return Plan(f"{shot.id}:end", shot, END, end_prompt(style, shot, subjects if own else []),
+                                [made[shot.id], *own],
+                                [START_LABEL, *(ref_label("cast member", s) for s in shot.subjects if own)],
+                                end_brief(shot, subjects))
                 i, view = i + 1, START
                 continue
             prev = chain[i - 1] if i else None
@@ -314,6 +328,10 @@ class KeyframeService:
                 logger.info("keyframe %s: opens on %s's ending", shot.id, prev.id)
                 view = END
                 continue
+            if real:                                            # real footage is drawn from words alone
+                p[1], p[2] = i, START
+                place = places[shot.place]
+                return Plan(shot.id, shot, START, real_prompt(shot, place), [], [], real_brief(shot, place))
             refs = self._refs_for(shot, cast, sheets)
             if refs is None:
                 blocked.append(shot.id)
@@ -350,7 +368,8 @@ class KeyframeService:
         if not todo:
             return made
         self._guard_spend(run_id, model, len(todo))
-        ref_urls = {r.id: asset_url(self._storage, self._images.upload, r) for plan, *_ in todo for r in plan.refs}
+        ref_urls = asset_urls(self._storage, self._images.upload, [r for plan, *_ in todo for r in plan.refs],
+                              self._settings.image_workers)
         ref_bytes = {r.id: self._storage.get(r.path) for plan, *_ in todo for r in plan.refs}
         with ThreadPoolExecutor(max_workers=self._settings.image_workers) as pool:
             futures = {pool.submit(self._attempts, model, ref_urls, ref_bytes, *job): job[0] for job in todo}
@@ -404,7 +423,7 @@ class KeyframeService:
             drawn = f"{prompt} {correction}" if correction else prompt
             reply = self._images.generate(model, drawn, urls, ASPECT, seed=seed, thinking=thinking)
             checklist, call = self._check.check(reply.data, labelled, brief)
-            problems, findings = self._check.problems(checklist, brief), self._check.notes(checklist)
+            problems, findings = self._check.problems(checklist, brief), self._check.notes(checklist, brief)
             tries.append(Attempt(attempt=attempt, seed=seed, thinking=thinking, prompt=drawn, correction=correction,
                                  fix=fix, score=checklist.score,
                                  asked_for=[a.model_dump() for a in checklist.asked_for], notes=findings,
@@ -435,7 +454,7 @@ class KeyframeService:
         checklist, call = self._check.check(best.reply.data, labelled, plan.brief, model=model)
         problems = self._check.problems(checklist, plan.brief)
         best.second, best.problems, best.score = call, problems, checklist.score      # its verdict stands, either way
-        best.notes, best.asked_for = self._check.notes(checklist), [a.model_dump() for a in checklist.asked_for]
+        best.notes, best.asked_for = self._check.notes(checklist, plan.brief), [a.model_dump() for a in checklist.asked_for]
         if problems:
             logger.warning("keyframe %s: second opinion from %s agrees, try %d fails:\n%s", plan.key, model,
                            best.attempt, "\n".join(f"  - {p}" for p in problems))

@@ -1,7 +1,7 @@
 band = "3-5"
 grades = [3, 4, 5]
 allowed_types = ["concept", "process", "journey", "personalised_hero"]
-look = "Clean stylised 3D or flat illustration."
+look = "Clean hand-painted storybook illustration."
 shot_seconds = [3, 5]
 face_to_camera_share = 0.4
 on_screen_text = "Numbers and key terms."
@@ -11,5 +11,5 @@ max_size_jump = 2
 camera_moves = ["static", "pan", "tilt", "push_in", "pull_back", "truck", "pedestal", "orbit", "follow"]
 max_people_in_frame = 4
 max_camera_speed = "fast"
-style = "thick clean dark outlines, flat saturated colours, crisp simple shapes and five-heads-tall proportions"
-style_name = "A bold 2D cartoon"
+style = "gouache and watercolour with visible brush texture, soft shading, gentle edges, warm light and five-heads-tall proportions"
+style_name = "A hand-painted 2D storybook"

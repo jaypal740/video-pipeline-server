@@ -6,12 +6,17 @@ from dependency_injector import providers
 from src.core.container import Container
 from src.schema.asset.asset_schema import ReviewState
 from src.schema.enums import StageName, StageStatus
+from src.schema.lesson.lesson_schema import GradeBand
+from src.schema.run.run_schema import Run
+from src.schema.run.stage_state_schema import StageState
+from src.schema.song.song_schema import Song
 from src.service.lipsync.fal_lipsync_service import LipsyncReply
 from src.service.lipsync.lipsync_service import KEYFRAME_LABEL, LipsyncService
 from src.service.storage.storage_service import LocalStorage
 from src.service.video.clip_checks import ClipChecks
-from tests.test_keyframe_service import ready_run
-from tests.test_sheet_service import FakeFal, FakeVision, tiny_png
+from src.service.video.fal_video_service import VideoReply
+from tests.test_keyframe_service import ready_run, shot
+from tests.test_sheet_service import BOARD, FakeFal, FakeVision, tiny_png
 
 
 class FakeFalLipsync:
@@ -31,6 +36,18 @@ class FakeFalLipsync:
     def upload(self, data, content_type):
         self.uploads.append((data, content_type))
         return f"https://fal.fake/{content_type}/{len(self.uploads)}"
+
+
+class FakeFalVideo:
+    """The singer's moving clip, before her mouth is set to the song."""
+
+    def __init__(self):
+        self.calls = []
+
+    def generate(self, model, prompt, image_url, seconds, seed=None, negative=None, end_image_url=None):
+        self.calls.append((model, prompt, image_url, seconds))
+        return VideoReply(data=b"moving", content_type="video/mp4", model=model, seed=seed, seconds_requested=seconds,
+                          cost_usd=round(0.04 * seconds, 4), request_id="vid-1")
 
 
 class FakeFfmpeg:
@@ -78,8 +95,8 @@ def stage(container: Container, tmp_path):
     sheets.approve_host("3-5", sheets.host_candidates("3-5", count=1)[0].id)
     service = LipsyncService(run_repository=container.run_repository(), song_repository=container.song_repository(),
                              asset_repository=container.asset_repository(), storage=container.storage(),
-                             lipsync=lipsync, ffmpeg=ffmpeg, checks=checks, check=container.image_check_service(),
-                             settings=container.settings())
+                             lipsync=lipsync, video=FakeFalVideo(), ffmpeg=ffmpeg, checks=checks,
+                             check=container.image_check_service(), settings=container.settings())
     return service, sheets, lipsync, ffmpeg, checks, vision
 
 
@@ -164,3 +181,28 @@ def test_the_cap_stops_a_run_before_drawing_and_keyframes_must_be_done(stage, co
     assert container.run_repository().stage(run.id, StageName.LIPSYNC).status == StageStatus.FAILED
     with pytest.raises(ValueError, match="no finished keyframes"):
         service.run(ready_run(container, sheets).id)
+
+
+def test_a_songs_own_singer_gets_one_moving_clip_per_run_of_sung_shots_with_her_mouth_set_to_the_song(stage, container):
+    service, sheets, lipsync, ffmpeg, checks, vision = stage
+    girl = {"id": "singer", "kind": "person", "look": "A girl of about ten in a green jacket", "size": "child",
+            "scale": "human", "star": True}
+    sung = [{**shot(i, "sung", "sea", ["singer", "ship"], "medium_close"), "performer": "singer", "start": a, "end": b}
+            for i, a, b in (("s02", 4.0, 7.0), ("s03", 7.0, 8.5))]
+    board = {**BOARD, "cast": [m for m in BOARD["cast"] if m["id"] == "ship"] + [girl],
+             "shots": [shot("s01", "illustrate", "sea", ["ship"], "wide"), *sung]}
+    song = container.song_repository().songs.add(Song(name="singer-song", audio_path="a.mp3", lyrics="x"))
+    run = container.run_repository().runs.add(Run(song_id=song.id, name="r", audience=GradeBand.G3_5))
+    container.run_repository().stage_states.add(StageState(run_id=run.id, stage=StageName.STORYBOARD,
+                                                           status=StageStatus.DONE, output=board))
+    green = sheets.run(run.id)["singer"]["stage"]
+    made = service.run(run.id)                                     # no keyframes needed: she is drawn from her sheet
+    assert made["s02"].id == made["s03"].id and len(lipsync.calls) == 1          # one performance through the cut
+    moving = service._video.calls[0]
+    assert moving[0] == "minimax-h3-max-turbo" and "sings happily" in moving[1] and moving[3] == 5.0   # 4.5 s sung; the model needs 5 s of clip
+    model, video_url, audio_url, seconds, _ = lipsync.calls[0]
+    assert model == "minimax-h3-max-video-lipsync" and video_url.startswith("https://fal.fake/video/mp4") and seconds == 4.5
+    assert (b"moving", "video/mp4") in lipsync.uploads
+    state = container.run_repository().stage(run.id, StageName.LIPSYNC)
+    assert state.status == StageStatus.DONE and state.output["offsets"] == {"s02": 0.0, "s03": 3.0}
+    assert made["s02"].params["keyframe"] == green.id and made["s02"].cost_usd == pytest.approx(0.08 * 4.5 + 0.04 * 5)

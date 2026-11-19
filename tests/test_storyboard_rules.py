@@ -1,12 +1,14 @@
 import pytest
 
-from src.schema.lesson.lesson_schema import GradeBand, VideoType
-from src.schema.storyboard.storyboard_schema import (Angle, Camera, CameraMove, CastKind, CastMember, Continuity,
-                                                     Direction, Motif, Motion, Moves, Place, Position, Scale,
-                                                     ScreenDirection, ShotDraft, ShotKind, ShotSize, Slot, Speed,
-                                                     StoryboardDraft, Transition)
+from src.schema.lesson.lesson_schema import GradeBand, LessonSequence, VideoType
+from src.schema.storyboard.storyboard_schema import (Angle, BoardHeader, Camera, CameraMove, CastKind, CastMember,
+                                                     Continuity, Direction, Motif, Motion, Moves, Place, Position,
+                                                     Scale, ScreenDirection, SequencePlaces, ShotDraft, ShotKind,
+                                                     ShotSize, Slot, Speed, StoryboardDraft, Transition)
 from src.service.lesson.lesson_rules import band_rules, format_rules
-from src.service.storyboard.storyboard_rules import assemble, fix, header_problems, host_for, shot_problems
+from src.service.storyboard.storyboard_prompt import STAR_SYSTEM, sequence_prompt
+from src.service.storyboard.storyboard_rules import (assemble, fix, header_problems, host_for, shot_problems,
+                                                     star_problems)
 
 BAND, FMT, HOST = band_rules(GradeBand.G3_5), format_rules(VideoType.JOURNEY), host_for(GradeBand.G3_5)
 
@@ -77,15 +79,13 @@ def test_code_fixes_camera_sung_and_number_framing():
     assert k2.camera.move == CameraMove.STATIC
 
 
-def test_a_camera_shot_needs_a_camera_move_and_a_sung_shot_is_never_one():
-    s = slots(ShotKind.ILLUSTRATE, ShotKind.ILLUSTRATE, ShotKind.SUNG)
-    still = shot("s01", size=ShotSize.WIDE, moves=Moves.CAMERA)
-    tilt = shot("s02", moves=Moves.CAMERA, camera=Camera(move=CameraMove.TILT, direction=Direction.UP))
-    sung = shot("s03", moves=Moves.CAMERA, camera=Camera(move=CameraMove.PUSH_IN))
-    fix(sung, s[2], BAND, people=set())
-    found = shot_problems(board(still, tilt), s[:2], BAND, FMT, HOST)
-    assert list(found) == ["s01"] and "camera is static" in found["s01"][0]
-    assert sung.moves == Moves.SUBJECT
+def test_every_shot_becomes_a_subject_shot_so_nothing_is_a_still_picture():
+    s = slots(ShotKind.ILLUSTRATE, ShotKind.SUNG)
+    still = shot("s01", size=ShotSize.WIDE, moves=Moves.CAMERA, camera=Camera(move=CameraMove.TILT, direction=Direction.UP))
+    sung = shot("s02", moves=Moves.CAMERA, camera=Camera(move=CameraMove.PUSH_IN))
+    for draft, slot in ((still, s[0]), (sung, s[1])):
+        fix(draft, slot, BAND, people=set())
+    assert still.moves == Moves.SUBJECT and still.camera.move == CameraMove.TILT and sung.moves == Moves.SUBJECT
 
 
 def test_film_grammar_is_checked():
@@ -220,3 +220,62 @@ def test_a_sung_shot_needs_a_walkable_place_and_a_real_kit():
     assert "s01" not in found and "not walkable" in found["s02"][0] and "needs a host_outfit" in found["s03"][0]
     places[0].host_outfit = "a coat with 1858 printed on the back"
     assert any("host_outfit has digits" in p for p in header_problems(draft, BAND, s))
+
+
+def test_a_song_with_its_own_singer_has_a_star_who_sings_and_no_other_face():
+    pip = CastMember(id="pip", kind=CastKind.CHARACTER, look="A plump green caterpillar with big amber eyes",
+                     size="thumb sized", scale=Scale.HUMAN)
+    girl = CastMember(id="singer", kind=CastKind.PERSON, look="A girl of about ten in a red jacket", size="child",
+                      scale=Scale.HUMAN, star=True)
+    fern = CastMember(id="fern", kind=CastKind.CHARACTER, look="A wide leaf with sleepy eyes", size="hand sized",
+                      scale=Scale.HUMAN)
+    ship = CastMember(id="ship", kind=CastKind.THING, look="A wooden steamship", size="long", scale=Scale.LANDSCAPE)
+    real = [m.model_copy(update={"kind": CastKind.THING, "look": look})         # shown as they really look
+            for m, look in ((pip, "A plump striped caterpillar"), (fern, "A wide milkweed leaf"))]
+    assert star_problems([girl, *real, ship], starred=True) == []
+    assert "nothing but the singer has a face" in star_problems([girl, pip, fern, ship], starred=True)[0]
+    in_green = girl.model_copy(update={"look": "A girl of about ten in a teal jacket"})     # her screen is green
+    assert "names 'teal'" in star_problems([in_green, *real, ship], starred=True)[0]
+    assert "star true" in star_problems([*real, ship], starred=True)[0]
+    assert "its kind is person" in star_problems([real[0].model_copy(update={"star": True})], starred=True)[0]
+    assert len(star_problems([pip, fern, ship], starred=False)) == 2          # no board has a thing with a face
+    assert header_problems(board(shot("s01"), cast=[girl, *real, ship]), BAND, slots(ShotKind.SUNG)) == []
+    named = board(shot("s01", subjects=["pip"], start_state="Pip sits under Fern, who looks down."), cast=[pip, fern, ship])
+    found = shot_problems(named, slots(ShotKind.SUNG), BAND, FMT, None)          # a named character is in subjects
+    assert any("names Fern, who is not in its subjects" in p for p in found["s01"])
+    named.shots[0].subjects = ["pip", "fern"]
+    assert not any("names" in p for p in shot_problems(named, slots(ShotKind.SUNG), BAND, FMT, None).get("s01", []))
+
+    s = slots(ShotKind.SUNG, ShotKind.SUNG)
+    sung = shot("s01", subjects=["fern", "singer", "ship"], start_state="The ship rests on calm grey water")
+    assert fix(sung, s[0], BAND, {"singer", "pip", "fern"}, {"singer"}) and sung.subjects == ["singer", "ship"]
+    draft = board(sung, shot("s02"), cast=[girl, pip, fern, ship])
+    found = shot_problems(draft, s, BAND, FMT, None)                           # no host: the star sings anywhere
+    assert "s01" not in found and "list the star" in found["s02"][0]
+    draft.shots[1].subjects = ["singer"]
+    assert [x.performer for x in assemble(draft, s, None)[0]] == ["singer", "singer"]
+    draft.shots[1].start_state = "The singer stands at the left edge beside a ship"     # code adds her, no picture shows her
+    assert any("never in the picture" in p for p in shot_problems(draft, s, BAND, FMT, None)["s02"])
+    draft.shots[1].start_state = "A girl waves from the ship"
+    assert any("never in the picture" in p for p in shot_problems(draft, s, BAND, FMT, None)["s02"])
+    music = shot("s01", subjects=["singer", "ship"])
+    fix(music, slots(ShotKind.MUSIC)[0], BAND, {"singer", "pip", "fern"}, {"singer"})
+    assert music.subjects == ["ship"]
+
+
+def test_a_song_with_its_own_singer_is_boarded_with_no_host_and_no_other_face():
+    assert "host" not in STAR_SYSTEM and "star true" in STAR_SYSTEM
+    assert "Only the song's singer is a character" in STAR_SYSTEM and "kind person or thing" in STAR_SYSTEM
+
+
+def test_a_sequence_written_alone_is_told_how_it_opens_and_how_the_next_one_does():
+    topics = [LessonSequence(first_line=i, last_line=i, topic=t, place="deck", change="c") for i, t in
+              enumerate(["Laying", "Hauling"])]
+    def told(*opens) -> str:
+        places = [SequencePlaces(home="deck", opens=o) for o in opens]
+        return sequence_prompt("USER", BoardHeader(shape="s", cast=[], places=[], motifs=[], sequence_places=places),
+                               [], 0, topics, ["s01"], alone=True)
+    text = told("The cable lies coiled on the deck.", "The cable hangs over the stern.")
+    assert "start_state shows it: The cable lies coiled on the deck." in text
+    assert "in deck, which opens like this: The cable hangs over the stern." in text
+    assert "opens like this" not in told("", "")                # a header without them changes nothing

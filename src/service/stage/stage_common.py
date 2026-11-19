@@ -1,12 +1,13 @@
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from src.repository.asset.asset_repository import AssetRepository
 from src.repository.run.run_repository import RunRepository
 from src.schema.asset.asset_schema import Asset, ReviewState
 from src.schema.asset.cost_entry_schema import CostEntry
 from src.schema.base_schema import utcnow
-from src.schema.enums import StageName, StageStatus
+from src.schema.enums import FilmType, StageName, StageStatus
 from src.schema.image.image_check_schema import Brief, Correction
 from src.schema.run.stage_state_schema import StageState
 from src.schema.storyboard.storyboard_schema import Storyboard
@@ -20,9 +21,35 @@ URL_SECONDS = 3600
 PASSED = (ReviewState.PASSED, ReviewState.APPROVED)          # a try that met the bar; USABLE adds used_best
 # The stop-loss looks at the first this-many finished shots.
 STOP_LOSS_AFTER = 8
+# The film types the realistic stages make; 2d films have their own stages under two_d.
+REALISTIC = frozenset({FilmType.NARRATION, FilmType.MUSIC_VIDEO})
+
+
+def film_type_of(runs: RunRepository, run_id: str) -> FilmType | None:
+    """The run's film type, from its lesson: a 2d lesson has beats, a realistic one says its type. None when
+    there is no lesson yet, or a realistic lesson stored before film types existed."""
+    state = runs.stage(run_id, StageName.LESSON)
+    output = state.output if state is not None else {}
+    if "beats" in output:
+        return FilmType.TWO_D
+    return FilmType(output["film_type"]) if output.get("film_type") else None
+
+
+def require_film_type(runs: RunRepository, run_id: str, allowed: frozenset[FilmType]) -> None:
+    """Stops a stage before it spends anything on a run of a film type it does not make. A run with no lesson
+    yet is accepted by any stage; its lesson then fixes its type."""
+    state = runs.stage(run_id, StageName.LESSON)
+    if state is None or not state.output:
+        return
+    found = film_type_of(runs, run_id)
+    if found in allowed or (found is None and allowed == REALISTIC):
+        return
+    hint = "run 2d <stage>" if found == FilmType.TWO_D else "run <stage>"
+    raise ValueError(f"run {run_id[:8]} is a {found or 'realistic'} film; use `{hint}`")
 
 
 def storyboard_of(runs: RunRepository, run_id: str) -> Storyboard:
+    require_film_type(runs, run_id, REALISTIC)
     state = runs.stage(run_id, StageName.STORYBOARD)
     if state is None or state.status != StageStatus.DONE:
         raise ValueError(f"Run {run_id} has no storyboard; run the storyboard stage first")
@@ -32,6 +59,14 @@ def storyboard_of(runs: RunRepository, run_id: str) -> Storyboard:
 def asset_url(storage: Storage, upload, asset: Asset) -> str:
     """A link the model provider can fetch: the store's own link, else the picture uploaded to the provider."""
     return storage.url(asset.path, URL_SECONDS) or upload(storage.get(asset.path), "image/png")
+
+
+def asset_urls(storage: Storage, upload, assets: list[Asset], workers: int) -> dict[str, str]:
+    """A link for each picture, by asset id, uploaded several at once: one at a time, a film's pictures took
+    longer to upload than its clips took to make."""
+    unique = list({a.id: a for a in assets}.values())
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        return dict(zip((a.id for a in unique), pool.map(lambda a: asset_url(storage, upload, a), unique)))
 
 
 def add_cost(assets: AssetRepository, run_id: str | None, stage: StageName, provider: str, model: str, cost: float,
@@ -84,7 +119,7 @@ def write_correction(llm: LlmService, model: str, log: logging.Logger, what: str
     """A short correction for the retry, from the failed prompt, the opening moment and the judge's
     findings; when none can be written the retry is drawn from the plain prompt."""
     try:
-        fix, call = llm.parse(model, CORRECTION, correction_request(prompt, brief.moment or "", findings), Correction,
+        fix, call = llm.parse(model, CORRECTION, correction_request(prompt, brief.moment or brief.description, findings), Correction,
                               check=check_correction, effort="low")
     except LlmError as exc:
         log.warning("%s %s: no correction, retrying the plain prompt: %s", what, shot_id, exc)

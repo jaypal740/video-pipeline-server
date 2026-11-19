@@ -48,12 +48,19 @@ def test_long_intros_and_outros_get_music_shots_short_ones_join_a_line():
         (0.0, 4.0, [0], ShotKind.ILLUSTRATE), (4.0, 8.0, [0], ShotKind.ILLUSTRATE)]
 
 
-def test_a_chorus_sung_again_points_at_the_shot_it_copies():
+def test_a_chorus_sung_again_gets_shots_of_its_own():
     lines, lesson = song((0.0, 4.0, LineTag.ILLUSTRATE, "chorus", "Germs adapt"),
                          (4.0, 8.0, LineTag.ILLUSTRATE, "verse", "A drug arrives"),
                          (8.0, 12.0, LineTag.ILLUSTRATE, "chorus", "Germs adapt"))
     slots = make_slots(lines, lesson, beats=[], duration=12.0, shot_seconds=[3, 5])
-    assert [s.repeat_of for s in slots] == [None, None, "s01"]
+    assert [s.repeat_of for s in slots] == [None, None, None] and [s.lines for s in slots] == [[0], [1], [2]]
+
+
+def test_a_chorus_line_never_merges_with_a_verse_line():
+    lines, lesson = song((0.0, 1.5, LineTag.ILLUSTRATE, "chorus", "Germs adapt"),
+                         (1.5, 4.0, LineTag.ILLUSTRATE, "verse", "A drug arrives"),
+                         (4.0, 5.5, LineTag.ILLUSTRATE, "chorus", "Germs adapt"))
+    assert [s.lines for s in make_slots(lines, lesson, beats=[], duration=5.5, shot_seconds=[3, 5])] == [[0], [1], [2]]
 
 
 def test_a_break_between_lines_gets_its_own_music_shot():
@@ -70,25 +77,6 @@ def test_a_line_just_over_the_maximum_stays_one_shot():
         (0.0, 5.1, [0], ShotKind.ILLUSTRATE)]
     lines, lesson = song((0.0, 10.0, LineTag.ILLUSTRATE, None, "a"))
     assert len(make_slots(lines, lesson, beats=[], duration=10.0, shot_seconds=[3, 5])) == 2
-
-
-def test_short_chorus_lines_merge_the_same_way_each_time_they_come_back():
-    lines, lesson = song((0.0, 1.5, LineTag.ILLUSTRATE, "chorus", "Germs adapt"),
-                         (1.5, 4.0, LineTag.ILLUSTRATE, "chorus", "germs survive"),
-                         (4.0, 8.0, LineTag.ILLUSTRATE, "verse", "A drug arrives"),
-                         (8.0, 9.5, LineTag.ILLUSTRATE, "chorus", "Germs adapt"),
-                         (9.5, 12.0, LineTag.ILLUSTRATE, "chorus", "germs survive"))
-    slots = make_slots(lines, lesson, beats=[], duration=12.0, shot_seconds=[3, 5])
-    assert spans(slots) == [(0.0, 4.0, [0, 1], ShotKind.ILLUSTRATE), (4.0, 8.0, [2], ShotKind.ILLUSTRATE),
-                            (8.0, 12.0, [3, 4], ShotKind.ILLUSTRATE)]
-    assert [s.repeat_of for s in slots] == [None, None, "s01"]
-
-
-def test_a_chorus_line_never_merges_with_a_verse_line():
-    lines, lesson = song((0.0, 1.5, LineTag.ILLUSTRATE, "chorus", "Germs adapt"),
-                         (1.5, 4.0, LineTag.ILLUSTRATE, "verse", "A drug arrives"),
-                         (4.0, 5.5, LineTag.ILLUSTRATE, "chorus", "Germs adapt"))
-    assert [s.lines for s in make_slots(lines, lesson, beats=[], duration=5.5, shot_seconds=[3, 5])] == [[0], [1], [2]]
 
 
 def test_a_line_timed_at_almost_zero_length_joins_its_neighbour():
@@ -108,3 +96,28 @@ def test_the_intro_is_measured_after_snapping_to_the_beat():
     lines, lesson = song((3.3, 5.8, LineTag.ILLUSTRATE, None, "a"))
     slots = make_slots(lines, lesson, beats=[3.2], duration=5.8, shot_seconds=[3, 5])
     assert spans(slots)[0] == (0.0, 3.2, [], ShotKind.MUSIC)             # snapped back to 3.2 s, long enough
+
+
+def test_by_scene_the_pictures_are_cut_by_time_and_sung_lines_keep_their_own_shot():
+    lines, lesson = song((0.0, 2.0, LineTag.ILLUSTRATE, None, "a"), (2.0, 4.0, LineTag.ILLUSTRATE, None, "b"),
+                         (4.0, 6.0, LineTag.ILLUSTRATE, None, "c"), (6.0, 8.0, LineTag.ILLUSTRATE, None, "d"),
+                         (8.0, 12.0, LineTag.FACE_TO_CAMERA, None, "e"), (16.0, 18.0, LineTag.ILLUSTRATE, None, "f"))
+    by_line = make_slots(lines, lesson, beats=[], duration=18.0, shot_seconds=[3, 5])
+    assert [s.lines for s in by_line] == [[0, 1], [2, 3], [4], [], [5]]          # a shot per pair of short lines
+    slots = make_slots(lines, lesson, beats=[], duration=18.0, shot_seconds=[3, 5], by_scene=True)
+    assert spans(slots) == [(0.0, 4.0, [0, 1], ShotKind.ILLUSTRATE), (4.0, 8.0, [2, 3], ShotKind.ILLUSTRATE),
+                            (8.0, 12.0, [4], ShotKind.SUNG),                # the break and line f are one run,
+                            (12.0, 15.0, [], ShotKind.MUSIC), (15.0, 18.0, [5], ShotKind.ILLUSTRATE)]   # cut in two
+    long = song((0.0, 9.0, LineTag.ILLUSTRATE, None, "a"), (9.0, 10.0, LineTag.ILLUSTRATE, None, "b"))
+    slots = make_slots(*long, beats=[], duration=10.0, shot_seconds=[3, 5], by_scene=True)
+    assert spans(slots) == [(0.0, 5.0, [0], ShotKind.ILLUSTRATE), (5.0, 10.0, [0, 1], ShotKind.ILLUSTRATE)]
+
+
+def test_a_sung_line_timed_with_the_music_after_it_ends_when_it_did_the_first_time():
+    lines, lesson = song((0.0, 4.0, LineTag.FACE_TO_CAMERA, "chorus", "Metamorphosis!"),
+                         (4.0, 8.0, LineTag.ILLUSTRATE, "verse", "A drug arrives"),
+                         (8.0, 14.0, LineTag.FACE_TO_CAMERA, "chorus", "Metamorphosis!"),
+                         (14.0, 41.0, LineTag.FACE_TO_CAMERA, "chorus", "Metamorphosis!"))
+    slots = make_slots(lines, lesson, beats=[], duration=41.0, shot_seconds=[3, 5])
+    assert spans(slots)[2:4] == [(8.0, 14.0, [2], ShotKind.SUNG), (14.0, 18.0, [3], ShotKind.SUNG)]
+    assert all(s.kind == ShotKind.MUSIC and not s.lines for s in slots[4:]) and slots[-1].end == 41.0

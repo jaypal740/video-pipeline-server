@@ -6,7 +6,7 @@ import uvicorn
 from src.core.container import Container
 from src.core.logging import configure_logging
 from src.core.database import create_tables
-from src.schema.enums import StageName
+from src.schema.enums import FilmType, StageName
 from src.schema.lesson.lesson_schema import GradeBand, VideoType
 from src.schema.run.run_schema import Run
 from src.schema.song.song_schema import SongStatus
@@ -18,9 +18,11 @@ song_app = typer.Typer(no_args_is_help=True, help="Songs: add one, analyse it (s
 run_app = typer.Typer(no_args_is_help=True, help="Video runs made from an analysed song.")
 key_app = typer.Typer(no_args_is_help=True, help="API keys products call the server with.")
 host_app = typer.Typer(no_args_is_help=True, help="The fixed host of each grade band: draw candidates, approve one.")
+two_d_app = typer.Typer(no_args_is_help=True, help="2D films: teaching beats, an animation script, drawings, loops and a code render.")
 app.add_typer(db_app, name="db")
 app.add_typer(song_app, name="song")
 app.add_typer(run_app, name="run")
+run_app.add_typer(two_d_app, name="2d")
 app.add_typer(key_app, name="key")
 app.add_typer(host_app, name="host")
 
@@ -76,10 +78,14 @@ def key_revoke(prefix: str) -> None:
 def song_add(
     name: str = typer.Option(..., "--name", help="Unique song name, e.g. antibiotic-resistance."),
     audio: Path = typer.Option(..., "--audio", exists=True, dir_okay=False, help="Song audio file."),
-    lyrics: Path = typer.Option(..., "--lyrics", exists=True, dir_okay=False, help="Lyrics or narration text."),
+    lyrics: Path | None = typer.Option(None, "--lyrics", exists=True, dir_okay=False, help="Lyrics or narration text."),
+    jamwise: Path | None = typer.Option(None, "--jamwise", exists=True, dir_okay=False,
+                                        help="JamWise job export; its lyrics and timing are used instead of --lyrics."),
 ) -> None:
     """Register a song. Its audio is copied into the asset folder."""
-    song = container.song_service().add(name, audio, lyrics.read_text())
+    if (lyrics is None) == (jamwise is None):
+        raise typer.BadParameter("give either --lyrics or --jamwise")
+    song = container.song_service().add(name, audio, lyrics.read_text() if lyrics else None, jamwise)
     typer.echo(song.id)
 
 
@@ -139,11 +145,15 @@ def run_lesson(
     run_id: str,
     model: str | None = typer.Option(None, "--model", help="Override the lesson model."),
     video_type: VideoType | None = typer.Option(None, "--type", help="Ask for this video type."),
+    film_type: FilmType | None = typer.Option(None, "--film", help="narration or music_video; default: music_video "
+                                              "for a JamWise song, else narration. 2d films use `run 2d lesson`."),
     force: bool = typer.Option(False, "--force", help="Plan again even if nothing changed."),
 ) -> None:
     """Stage 2: what each line teaches and shows, and the video type for the run's grade band."""
-    plan = container.lesson_service().run(run_id, model=model, video_type=video_type, force=force)
-    typer.echo(f"{plan.topic} ({plan.subject}), grades {plan.grade_band}: {plan.video_type}. {plan.type_reason}")
+    plan = container.lesson_service().run(run_id, model=model, video_type=video_type, film_type=film_type,
+                                          force=force)
+    typer.echo(f"{plan.topic} ({plan.subject}), grades {plan.grade_band}, {plan.film_type}: {plan.video_type}. "
+               f"{plan.type_reason}")
     typer.echo(f"terms: {', '.join(t.term for t in plan.key_terms)}")
     for line in plan.lines:
         typer.echo(f"  {line.index:3d}  {line.tag:14s}  {line.show[:90]}")
@@ -246,6 +256,91 @@ def run_recheck(run_id: str) -> None:
     for shot_id, asset in container.keyframe_service().recheck(run_id).items():
         typer.echo(f"  {shot_id}  {asset.review:12s} try {asset.params.get('try', 1)}  {asset.params.get('score')}/10"
                    + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
+
+
+@two_d_app.command("lesson")
+def two_d_lesson(
+    run_id: str,
+    model: str | None = typer.Option(None, "--model", help="Override the lesson model."),
+    force: bool = typer.Option(False, "--force", help="Plan again even if nothing changed."),
+) -> None:
+    """Stage 2: the teaching beats: what each part of the song teaches, its key word and when it is sung."""
+    plan = container.beat_lesson_service().run(run_id, model=model, force=force)
+    typer.echo(f"{plan.topic} ({plan.subject}), grades {plan.grade_band}")
+    typer.echo(f"terms: {', '.join(t.term for t in plan.key_terms)}")
+    for beat in plan.beats:
+        typer.echo(f"  {beat.id}  {beat.start:6.1f}-{beat.end:6.1f}s  {beat.type:8s}  {beat.keyword or '-':16s}  "
+                   f"{beat.concept[:80]}")
+
+
+@two_d_app.command("storyboard")
+def two_d_storyboard(
+    run_id: str,
+    model: str | None = typer.Option(None, "--model", help="Override the storyboard model."),
+    force: bool = typer.Option(False, "--force", help="Board again even if nothing changed."),
+) -> None:
+    """Stage 3: the animation script: the drawings the video needs and what they do in each beat."""
+    board = container.script_service().run(run_id, model=model, force=force)
+    typer.echo(f"grades {board.grade_band}: {board.style}")
+    typer.echo(f"palette: {' '.join(board.palette)} | performer: {board.performer or '-'}")
+    for d in board.drawings:
+        typer.echo(f"  {d.id:20s} {d.kind:10s} {d.look[:60]}" + (f" | moves: {d.motion}" if d.motion else ""))
+    for beat in board.beats:
+        typer.echo(f"  {beat.beat}  {beat.start:6.1f}-{beat.end:6.1f}s  {beat.type:8s}  {beat.background}")
+        for a in beat.actions:
+            what = " ".join(str(v) for v in (a.drawing, f"to {a.to}" if a.to else None, a.pos, a.scale, a.text) if v)
+            typer.echo(f"      {a.at:6.1f}{f'-{a.until:.1f}' if a.until is not None else '':7s} {a.verb:10s} {what}")
+    typer.echo(f"review: {len(board.gaps)} gaps left" + "".join(f"\n  - {g}" for g in board.gaps))
+
+
+@two_d_app.command("drawings")
+def two_d_drawings(
+    run_id: str,
+    until: float | None = typer.Option(None, "--until", help="Only the drawings needed before this second of the song."),
+    force: bool = typer.Option(False, "--force", help="Draw again even if nothing changed."),
+) -> None:
+    """Stage 4: every drawing of the animation script, drawn once in the 2D style, cut out and checked."""
+    made = container.drawing_service().run(run_id, until=until, force=force)
+    for name, asset in made.items():
+        typer.echo(f"  {name:26s} {asset.review:10s} try {asset.params.get('try', 1)}  {asset.params.get('cut') or asset.path}"
+                   + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
+
+
+@two_d_app.command("check")
+def two_d_check(
+    run_id: str,
+    accept: bool = typer.Option(False, "--accept", help="The findings have been read; let the film go on as it is."),
+    force: bool = typer.Option(False, "--force", help="Check again even if nothing changed."),
+) -> None:
+    """Between drawings and loops: the film put together from the still drawings and judged against the lesson."""
+    problems = container.film_check_service().run(run_id, accept=accept, force=force)
+    for p in problems:
+        typer.echo(f"  {p.at:6.1f} s  {p.kind:14s} {p.what}")
+    typer.echo(f"  {len(problems)} problems" + (", accepted" if problems and accept else ""))
+
+
+@two_d_app.command("loops")
+def two_d_loops(
+    run_id: str,
+    until: float | None = typer.Option(None, "--until", help="Only the loops needed before this second of the song."),
+    force: bool = typer.Option(False, "--force", help="Animate again even if nothing changed."),
+) -> None:
+    """Stage 5: every drawing that has a motion, animated once into a short loop, cut out and checked."""
+    made = container.loop_service().run(run_id, until=until, force=force)
+    for name, asset in made.items():
+        typer.echo(f"  {name:26s} {asset.review:10s} try {asset.params.get('try', 1)}  {asset.params.get('cut') or asset.path}"
+                   + (f"  ({asset.review_notes.splitlines()[0][:70]})" if asset.review_notes else ""))
+
+
+@two_d_app.command("render")
+def two_d_render(
+    run_id: str,
+    until: float | None = typer.Option(None, "--until", help="Only the beats that start before this second of the song."),
+    force: bool = typer.Option(False, "--force", help="Render again even if nothing changed."),
+) -> None:
+    """Stage 6: the script played by code from the drawings and loops, as one film with the song under it."""
+    film = container.render_service().run(run_id, until=until, force=force)
+    typer.echo(f"  {film.params['seconds']:.1f} s, {film.params['frames']} frames  {film.path}")
 
 
 @host_app.command("draw")

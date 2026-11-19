@@ -17,10 +17,12 @@ class ShotKind(StrEnum):
 
 
 class CastKind(StrEnum):
-    """Only a person is a character; a thing looks and behaves as it really does."""
+    """A thing looks and behaves as it really does. A character is an animal or thing that a song's own plan
+    gives a face (a caterpillar, a leaf); only a song that comes with such a plan has one."""
 
     PERSON = "person"
     THING = "thing"
+    CHARACTER = "character"
 
 
 class Scale(StrEnum):
@@ -129,13 +131,15 @@ class Continuity(StrEnum):
 class CastMember(BaseModel):
     """A person or thing that appears in more than one shot. look is copied word for word into every
     image prompt it appears in, next to its reference sheet. scale: the rung it is seen at, so a
-    hose-sized cable is never the subject of a planet-wide shot."""
+    hose-sized cable is never the subject of a planet-wide shot. star: the singer of a song that comes with its
+    own characters, a person made for that song, who sings to camera in place of the host."""
 
     id: str
     kind: CastKind
     look: str
     size: str
     scale: Scale
+    star: bool = False
 
 
 class Place(BaseModel):
@@ -165,7 +169,7 @@ class Camera(BaseModel):
 
 class Slot(BaseModel):
     """A shot's place in time, cut by code from the lyric timings and beats. repeat_of: the slot whose
-    shot this one copies (a chorus sung again)."""
+    shot this one copies (a chorus sung again); sequence: the lesson sequence it belongs to."""
 
     id: str
     start: float
@@ -174,6 +178,7 @@ class Slot(BaseModel):
     kind: ShotKind
     number_text: str | None = None
     repeat_of: str | None = None
+    sequence: int = 0
 
 
 class ShotDraft(BaseModel):
@@ -193,6 +198,8 @@ class ShotDraft(BaseModel):
     screen_direction: ScreenDirection
     transition_in: Transition
     moves: Moves = Moves.SUBJECT                 # boards written before this field are all subject shots
+    step: int = 0                                # which step of its lesson sequence it shows, from 1
+    label: str | None = None                     # a term sung during the shot; code draws it on screen
 
 
 class StoryboardDraft(BaseModel):
@@ -206,10 +213,57 @@ class StoryboardDraft(BaseModel):
     shots: list[ShotDraft]
 
 
+class SequencePlaces(BaseModel):
+    """Where one lesson sequence is shown: its home place; up to two zoom places that show the same topic at
+    other scales, one closer and one wider (the atoms inside the Sun's core; Earth's orbit where a satellite
+    is hit); times: the home location declared again with other lighting (the field at night), so a
+    night shot is drawn from a night plate; and opens: how things stand when the sequence opens, for
+    sequences written at the same time."""
+
+    home: str
+    zooms: list[str] = Field(default_factory=list)
+    times: list[str] = Field(default_factory=list)      # the home location again at other times of day
+    opens: str = ""
+
+
+class BoardHeader(BaseModel):
+    """What the model writes first, for the whole video. sequence_places: one entry per lesson sequence,
+    in order; every picture shot of a sequence is in its home or zoom place."""
+
+    shape: str
+    cast: list[CastMember]
+    places: list[Place]
+    motifs: list[Motif]
+    sequence_places: list[SequencePlaces]
+
+
 class ShotPatch(BaseModel):
-    """A re-ask's answer: replacements for the named shots only."""
+    """One sequence's shots."""
 
     shots: list[ShotDraft]
+
+
+class Watched(BaseModel):
+    """What one sequence teaches a viewer who watches it with the sound off."""
+
+    sequence: int
+    learned: str
+
+
+class SoundOffWatch(BaseModel):
+    sequences: list[Watched]
+
+
+class Verdict(BaseModel):
+    """Whether a sequence watched with the sound off shows its lesson fact; missing: what it fails to show."""
+
+    sequence: int
+    clear: bool
+    missing: str = ""
+
+
+class SoundOffReview(BaseModel):
+    sequences: list[Verdict]
 
 
 class Shot(ShotDraft):

@@ -11,6 +11,13 @@ from src.service.assembly.assembly_service import AssemblyService
 from src.service.auth.auth_service import AuthService
 from src.service.image.fal_image_service import FalImageService
 from src.service.image.image_check_service import ImageCheckService
+from src.service.two_d.drawing.drawing_service import DrawingService
+from src.service.two_d.lesson.beat_lesson_service import BeatLessonService
+from src.service.two_d.loop.loop_checks import LoopCutService
+from src.service.two_d.loop.loop_service import LoopService
+from src.service.two_d.render.film_check_service import FilmCheckService
+from src.service.two_d.render.render_service import RenderService
+from src.service.two_d.script.script_service import ScriptService
 from src.service.video.clip_checks import ClipCheckService
 from src.service.video.fal_video_service import FalVideoService
 from src.service.video.video_service import VideoService
@@ -75,6 +82,7 @@ class Container(containers.DeclarativeContainer):
                                             fallback_model=settings.provided.video_fallback_model)
     fal_lipsync_service = providers.Singleton(FalLipsyncService, api_key=settings.provided.fal_key)
     clip_check_service = providers.Singleton(ClipCheckService, ffmpeg=ffmpeg_service)
+    loop_cut_service = providers.Singleton(LoopCutService, ffmpeg=ffmpeg_service)
     image_check_service = providers.Singleton(ImageCheckService, llm=llm_service, settings=settings)
 
     # services
@@ -104,6 +112,64 @@ class Container(containers.DeclarativeContainer):
         llm=llm_service,
         settings=settings,
     )
+    # 2d films (src/service/two_d)
+    beat_lesson_service = providers.Singleton(
+        BeatLessonService,
+        run_repository=run_repository,
+        song_repository=song_repository,
+        asset_repository=asset_repository,
+        llm=llm_service,
+        settings=settings,
+    )
+    script_service = providers.Singleton(
+        ScriptService,
+        run_repository=run_repository,
+        song_repository=song_repository,
+        asset_repository=asset_repository,
+        llm=llm_service,
+        settings=settings,
+    )
+    drawing_service = providers.Singleton(
+        DrawingService,
+        run_repository=run_repository,
+        asset_repository=asset_repository,
+        storage=storage,
+        images=fal_image_service,
+        check=image_check_service,
+        llm=llm_service,
+        settings=settings,
+    )
+    loop_service = providers.Singleton(
+        LoopService,
+        run_repository=run_repository,
+        asset_repository=asset_repository,
+        storage=storage,
+        video=fal_video_service,
+        cutter=loop_cut_service,
+        check=image_check_service,
+        llm=llm_service,
+        settings=settings,
+    )
+    render_service = providers.Singleton(
+        RenderService,
+        run_repository=run_repository,
+        song_repository=song_repository,
+        asset_repository=asset_repository,
+        storage=storage,
+        ffmpeg=ffmpeg_service,
+        settings=settings,
+    )
+    film_check_service = providers.Singleton(
+        FilmCheckService,
+        run_repository=run_repository,
+        song_repository=song_repository,
+        asset_repository=asset_repository,
+        render=render_service,
+        storyboard=script_service,
+        drawings=drawing_service,
+        llm=llm_service,
+        settings=settings,
+    )
     sheet_service = providers.Singleton(
         SheetService,
         run_repository=run_repository,
@@ -111,6 +177,7 @@ class Container(containers.DeclarativeContainer):
         storage=storage,
         images=fal_image_service,
         check=image_check_service,
+        llm=llm_service,
         settings=settings,
     )
     keyframe_service = providers.Singleton(
@@ -143,6 +210,7 @@ class Container(containers.DeclarativeContainer):
         asset_repository=asset_repository,
         storage=storage,
         lipsync=fal_lipsync_service,
+        video=fal_video_service,
         ffmpeg=ffmpeg_service,
         checks=clip_check_service,
         check=image_check_service,

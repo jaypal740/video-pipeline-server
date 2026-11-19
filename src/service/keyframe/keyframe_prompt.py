@@ -1,6 +1,6 @@
 from src.schema.storyboard.storyboard_schema import CastKind, CastMember, Place, Shot, ShotKind, ShotSize
 from src.schema.image.image_check_schema import Brief, Correction
-from src.service.sheet.sheet_prompt import NO_OVERLAY_TEXT, Style
+from src.service.sheet.sheet_prompt import NO_OVERLAY_TEXT, REAL, Style
 
 # A retry's prompt is the failed prompt plus a short correction written from the judge's findings.
 CORRECTION_WORDS = 60
@@ -34,13 +34,33 @@ def keyframe_prompt(style: Style, shot: Shot, place: Place, subjects: list[CastM
     """The frozen opening moment of one shot, at most about 90 words: style, framing, the place (image 1),
     the subjects named by their reference image, then start_state. The action and the end never appear."""
     named = ", ".join(f"{m.id.replace('_', ' ')} is image {i}" for i, m in enumerate(subjects, start=2))
-    lines = [f"{style.name} illustration, {_SIZE_WORDS[shot.size].lower()}, {_ANGLE_WORDS[shot.angle]}.",
+    lines = [f"{style.name} {style.medium}, {_SIZE_WORDS[shot.size].lower()}, {_ANGLE_WORDS[shot.angle]}.",
              f"The place is image 1: {place.look.rstrip('.')}, {place.lighting.rstrip('.')}."]
     if subjects:
         lines.append(f"{named[0].upper()}{named[1:]}, {_POSITION_WORDS[shot.position]}.")
     lines.append(shot.start_state.rstrip(".") + ".")
     lines.append(f"The design features {style.features}. Keep every design exactly as in the references.")
     return " ".join(lines)
+
+
+def real_prompt(shot: Shot, place: Place) -> str:
+    """The opening of a shot filmed as it really looks, drawn from words alone: no painted sheet is attached.
+    The subject keeps to the right, because the singer stands at the left."""
+    return " ".join([f"{REAL.name} {REAL.medium}, {_SIZE_WORDS[shot.size].lower()}, {_ANGLE_WORDS[shot.angle]}.",
+                     f"The place: {place.look.rstrip('.')}, {place.lighting.rstrip('.')}.",
+                     "The main subject sits in the right half of the frame, and the left third is open background.",
+                     shot.start_state.rstrip(".") + ".", f"It shows {REAL.features}."])
+
+
+def real_brief(shot: Shot, place: Place) -> Brief:
+    """What the judge scores a real picture against: the opening moment, as a photograph of the real thing."""
+    fatal = [NO_OVERLAY_TEXT, "No person in the picture"]
+    rules = [*fatal, "It looks like a photograph of the real thing: no drawn outlines and no cartoon face, eyes or "
+              "expression on any animal or thing", "Nothing warped, melted together or broken; suitable for school children"]
+    return Brief(description=(f"The opening moment above, before anything has happened, as real footage would show "
+                              f"it. The place is {place.look}, {place.lighting}; where the opening moment differs, "
+                              f"the moment wins. Framing: a {_SIZE_WORDS[shot.size].lower()}."),
+                 rules=rules, fatal=fatal, moment=shot.start_state)
 
 
 def correction_request(prompt: str, moment: str, findings: list[str]) -> str:
@@ -63,6 +83,13 @@ def ref_label(kind: str, ref_id: str) -> str:
     return f"the {kind} {ref_id}"
 
 
+def _no_faces(subjects: list[CastMember]) -> str:
+    """The rule against faces on things; a song's own characters are drawn with theirs."""
+    faced = [m.id.replace("_", " ") for m in subjects if m.kind == CastKind.CHARACTER]
+    return ("No face, eyes, mouth or human expression on anything that is not a person"
+            + (f" or one of the song's characters ({', '.join(faced)})" if faced else ""))
+
+
 def keyframe_brief(shot: Shot, place: Place, subjects: list[CastMember]) -> Brief:
     """What the judge scores a keyframe against. Who and what the shot shows comes from its opening moment,
     which the judge reads and writes its own checks from; the rules here hold for every shot."""
@@ -77,7 +104,7 @@ def keyframe_brief(shot: Shot, place: Place, subjects: list[CastMember]) -> Brie
         rules.append(f"The {m.id.replace('_', ' ')} is the same one as in the image labelled '{ref_label('cast member', m.id)}': "
                      f"same {'face, hair and clothes' if m.kind == CastKind.PERSON else 'shape, colours and materials'}")
     fatal = [NO_OVERLAY_TEXT, "No person or character beyond the ones the opening moment and the cast list name"]
-    rules += fatal + ["No face, eyes, mouth or human expression on anything that is not a person",
+    rules += fatal + [_no_faces(subjects),
                       "Nothing warped, melted together or broken; suitable for school children"]
     return Brief(description=description, rules=rules, fatal=fatal, moment=shot.start_state)
 
@@ -92,7 +119,7 @@ def linked_prompt(style: Style, shot: Shot, subjects: list[CastMember]) -> str:
     """The opening of a shot that carries on from the shot before in the same place: image 1 is where that
     shot ended, kept as it is apart from the new framing and what the opening moment says."""
     named = ", ".join(f"{m.id.replace('_', ' ')} is image {i}" for i, m in enumerate(subjects, start=2))
-    lines = [f"{style.name} illustration, {_SIZE_WORDS[shot.size].lower()}, {_ANGLE_WORDS[shot.angle]}.",
+    lines = [f"{style.name} {style.medium}, {_SIZE_WORDS[shot.size].lower()}, {_ANGLE_WORDS[shot.angle]}.",
              "Image 1 is the last frame of the shot before, in the same place: keep its place, light, designs and "
              "the state of everything in it, framed anew."]
     if subjects:
@@ -102,12 +129,15 @@ def linked_prompt(style: Style, shot: Shot, subjects: list[CastMember]) -> str:
     return " ".join(lines)
 
 
-def end_prompt(style: Style, shot: Shot) -> str:
+def end_prompt(style: Style, shot: Shot, subjects: list[CastMember]) -> str:
     """The last frame of a shot, drawn from its opening (image 1): the same framing and designs, with the
-    shot's end_state. The video model then animates from one to the other."""
-    return (f"{style.name} illustration. Image 1 is the opening frame of this shot. Draw the same shot a few seconds "
-            f"later: the same place, the same camera framing, the same designs, colours and line style. Now: "
-            f"{shot.end_state.rstrip('.')}. Keep everything that does not change exactly as in image 1.")
+    shot's end_state. The subjects' sheets come after it, so what appears by the end (a chrysalis where a
+    caterpillar hung) has its own design. The video model then animates from one to the other."""
+    named = ", ".join(f"{m.id.replace('_', ' ')} is image {i}" for i, m in enumerate(subjects, start=2))
+    return (f"{style.name} {style.medium}. Image 1 is the opening frame of this shot. Draw the same shot a few seconds "
+            f"later: the same place, the same camera framing, the same designs, colours and line style. "
+            + (f"{named[0].upper()}{named[1:]}, each drawn as in its image wherever it is seen. " if subjects else "")
+            + f"Now: {shot.end_state.rstrip('.')}. Keep everything that does not change exactly as in image 1.")
 
 
 def linked_brief(shot: Shot, place: Place, subjects: list[CastMember]) -> Brief:
@@ -118,7 +148,7 @@ def linked_brief(shot: Shot, place: Place, subjects: list[CastMember]) -> Brief:
     return brief
 
 
-def end_brief(shot: Shot) -> Brief:
+def end_brief(shot: Shot, subjects: list[CastMember]) -> Brief:
     """An ending is judged against end_state, in the framing and style of the shot's own opening."""
     fatal = [NO_OVERLAY_TEXT, f"No person or character that is not in the image labelled '{START_LABEL}'"]
     return Brief(description=(f"The last frame of a short shot whose first frame is the image labelled '{START_LABEL}'. "
@@ -126,5 +156,5 @@ def end_brief(shot: Shot) -> Brief:
                               "below, in the same place, framing and style as the start keyframe."),
                  rules=[f"Same place, camera framing, line style and colours as the image labelled '{START_LABEL}'",
                         "Every thing and person kept from the start keyframe has the same design", *fatal,
-                        "No face, eyes, mouth or human expression on anything that is not a person"],
+                        _no_faces(subjects)],
                  fatal=fatal, moment=f"(This is the ending of the shot, not its opening.) {shot.end_state}")

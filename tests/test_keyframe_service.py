@@ -169,8 +169,10 @@ def test_keyframes_need_finished_sheets_and_a_shot_without_a_usable_reference_fa
     run = container.run_repository().runs.add(Run(song_id=song.id, name="r", audience=GradeBand.G3_5))
     container.run_repository().stage_states.add(StageState(run_id=run.id, stage=StageName.STORYBOARD,
                                                            status=StageStatus.DONE, output={**BOARD, "shots": SHOTS}))
-    vision.fail_when = ("Victorian", 2)                        # the operator's front view fails both draws
+    vision.fail_when = ("Victorian", 3)                        # the operator's front view fails every draw
+    container.settings().image_workers = 1                     # one at a time, so the front view takes both fails
     sheets.run(run.id)
+    container.settings().image_workers = 4
     with pytest.raises(ValueError, match="sheets stage: failed"):   # a failed sheets stage stops the job
         service.run(run.id)
     vision.fail_when = None
@@ -318,7 +320,8 @@ def test_shots_in_one_place_are_chained_and_a_still_cut_opens_on_the_previous_en
     assert made["s03"].params["view"] == "linked_keyframe" and made["s03"].params["refs"][0] == ends["s02"].id
     assert made["s03"].params["labels"][0] == "the previous shot's last frame"
     assert "Image 1 is the last frame of the shot before" in made["s03"].prompt
-    assert ends["s03"].params["refs"] == [made["s03"].id] and "Now: The ship is near the centre" in ends["s03"].prompt
+    assert ends["s03"].params["refs"][0] == made["s03"].id and "Now: The ship is near the centre" in ends["s03"].prompt
+    assert len(ends["s03"].params["refs"]) == 3 and "is image 2" in ends["s03"].prompt   # its subjects' sheets too
     assert made["s04"].params["view"] == "keyframe" and "s04" not in ends                # sung: a new chain, no ending
     assert state.status == StageStatus.DONE and state.output["no_end"] == []
 
@@ -396,3 +399,25 @@ def test_a_moment_that_changes_the_place_wins_over_its_usual_look():
     s = Shot(**shot("s01", "illustrate", "park", [], "wide"))
     brief = keyframe_brief(s, park, [])
     assert "the moment wins" in brief.description and "adds to it or changes in it are fine" in brief.rules[0]
+
+
+def test_a_song_singers_sung_shots_are_real_pictures_each_drawn_from_words_alone(stage, container):
+    service, sheets, fal, vision = stage
+    girl = {"id": "singer", "kind": "person", "look": "A girl of about ten in a green jacket", "size": "child",
+            "scale": "human", "star": True}
+    sung = [{**shot(i, "sung", "sea", ["singer", "ship"], "medium_close", lines=(n,)), "performer": "singer",
+             "continuity": "same_place"} for n, i in enumerate(("s02", "s03"), start=1)]
+    shots = [shot("s01", "illustrate", "sea", ["ship"], "wide"), *sung]
+    board = {**BOARD, "cast": [m for m in BOARD["cast"] if m["id"] == "ship"] + [girl], "shots": shots}
+    n = len(container.run_repository().runs.list())
+    song = container.song_repository().songs.add(Song(name=f"song-{n}", audio_path="a.mp3", lyrics="x"))
+    run = container.run_repository().runs.add(Run(song_id=song.id, name="r", audience=GradeBand.G3_5))
+    container.run_repository().stage_states.add(StageState(run_id=run.id, stage=StageName.STORYBOARD,
+                                                           status=StageStatus.DONE, output=board))
+    sheets.run(run.id)
+    made = service.run(run.id)
+    state = container.run_repository().stage(run.id, StageName.KEYFRAMES)
+    assert made["s02"].prompt.startswith("Realistic documentary photograph, medium close shot")
+    assert made["s02"].params["refs"] == [] and "right half of the frame" in made["s02"].prompt   # no painted sheet
+    assert {"s02", "s03"} <= set(state.output["end_keyframes"])                # real footage changes like any shot
+    assert made["s03"].id != made["s02"].id and made["s03"].params["refs"] == []   # each stands on its own

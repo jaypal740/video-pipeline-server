@@ -1,6 +1,6 @@
 import math
 
-from src.schema.lesson.lesson_schema import LessonLine, LineTag
+from src.schema.lesson.lesson_schema import LessonLine, LessonSequence, LineTag
 from src.schema.song.song_analysis_schema import LyricLine
 from src.schema.storyboard.storyboard_schema import ShotKind, Slot
 from src.service.lesson.lesson_rules import repeats
@@ -10,19 +10,22 @@ SUNG_MAX = 10.0
 # A cut moves to a beat this close to it.
 SNAP = 0.25
 MIN_SLOT = 0.5
+# A sung line timed this many times longer than the same line took earlier in the song is timed with the
+# music after it (a song's last line often is), so it ends when the earlier one would have.
+OVERLONG = 2.0
 
 _KIND = {LineTag.FACE_TO_CAMERA: ShotKind.SUNG, LineTag.NUMBER: ShotKind.NUMBER,
          LineTag.ILLUSTRATE: ShotKind.ILLUSTRATE, LineTag.UNCLEAR: ShotKind.UNCLEAR}
 
 
 class _Span:
-    """A stretch of the song that becomes one or more shots. repeat_line: the earlier line this one repeats
-    (a chorus sung again); original: a line that a later line repeats."""
+    """A stretch of the song that becomes one or more shots. seq: its lesson sequence; section: the lyrics'
+    section its lines sit under, so a chorus line and a verse line never share a shot."""
 
     def __init__(self, start: float, end: float, lines: list[int], kind: ShotKind, number_text: str | None,
-                 repeat_line: int | None, original: bool = False) -> None:
+                 seq: int = 0, section: str | None = None) -> None:
         self.start, self.end, self.lines, self.kind = start, end, lines, kind
-        self.number_text, self.repeat_line, self.original = number_text, repeat_line, original
+        self.number_text, self.seq, self.section = number_text, seq, section
 
     def seconds(self) -> float:
         return self.end - self.start
@@ -34,19 +37,23 @@ def _snap(t: float, beats: list[float], earlier_only: bool) -> float:
 
 
 def _spans(lines: list[LyricLine], lesson: dict[int, LessonLine], beats: list[float], duration: float,
-           low: float) -> list[_Span]:
+           low: float, seq_of: dict[int, int]) -> list[_Span]:
     """One span per line, from its start to the next line's start. A gap without lyrics long enough for a
     shot of its own (intro, break, outro) becomes a music span; a shorter one joins the line before it."""
-    again = repeats(lines)
-    originals = set(again.values())
     spans = []
+    by_index, again = {l.index: l for l in lines}, repeats(lines)
     for i, line in enumerate(lines):
         start = _snap(line.start, beats, earlier_only=True)
         if i == 0 and start < low:                      # an intro too short for a shot joins the first line
             start = 0.0
         entry = lesson[line.index]
-        spans.append(_Span(start, line.end, [line.index], _KIND[entry.tag], entry.number_text,
-                           again.get(line.index), line.index in originals))
+        end = line.end
+        if entry.tag == LineTag.FACE_TO_CAMERA and line.index in again:
+            first = by_index[again[line.index]]
+            if line.end - line.start > OVERLONG * (first.end - first.start):
+                end = line.start + first.end - first.start
+        spans.append(_Span(start, end, [line.index], _KIND[entry.tag], entry.number_text,
+                           seq_of.get(line.index, 0), line.section))
     spans = _absorb_tiny(spans)
     joined = []
     for a, b in zip(spans, spans[1:] + [None]):
@@ -54,14 +61,14 @@ def _spans(lines: list[LyricLine], lesson: dict[int, LessonLine], beats: list[fl
         if b is None:
             continue
         if b.start - a.end >= low:
-            joined.append(_Span(a.end, b.start, [], ShotKind.MUSIC, None, None))
+            joined.append(_Span(a.end, b.start, [], ShotKind.MUSIC, None, seq=b.seq))
         else:
             a.end = b.start
     spans = joined
     if spans[0].start > 0:
-        spans.insert(0, _Span(0.0, spans[0].start, [], ShotKind.MUSIC, None, None))
+        spans.insert(0, _Span(0.0, spans[0].start, [], ShotKind.MUSIC, None, seq=spans[0].seq))
     if duration - spans[-1].end >= low:
-        spans.append(_Span(spans[-1].end, duration, [], ShotKind.MUSIC, None, None))
+        spans.append(_Span(spans[-1].end, duration, [], ShotKind.MUSIC, None, seq=spans[-1].seq))
     else:
         spans[-1].end = max(spans[-1].end, duration)
     return spans
@@ -84,34 +91,42 @@ def _absorb_tiny(spans: list[_Span]) -> list[_Span]:
     return out
 
 
-def _same_original(a: _Span, b: _Span, out: list[_Span]) -> bool:
-    """Two repeated lines whose originals share a shot: the repeat is cut the way the original was."""
-    home = {line: i for i, span in enumerate(out) for line in span.lines}
-    return home.get(a.repeat_line) is not None and home.get(a.repeat_line) == home.get(b.repeat_line)
-
-
 def _merge_short(spans: list[_Span], low: float, high: float) -> list[_Span]:
-    """A picture line shorter than a shot shares a shot with the next picture line when both fit in one.
-    Sung, number and music lines keep their own shots. A chorus line merges only with another chorus
-    line, and its repeats merge exactly as the originals did, so a repeat copies one whole shot."""
+    """A picture line shorter than a shot shares a shot with the next picture line of its sequence and
+    section when both fit in one. Sung, number and music lines keep their own shots."""
     def picture(s: _Span) -> bool:
         return s.kind in (ShotKind.ILLUSTRATE, ShotKind.UNCLEAR)
 
     out: list[_Span] = []
     for span in spans:
         prev = out[-1] if out else None
-        if prev is None or not (picture(prev) and picture(span)):
+        if prev is None or not (picture(prev) and picture(span)) or (prev.seq, prev.section) != (span.seq, span.section):
             out.append(span)
-        elif prev.repeat_line is not None or span.repeat_line is not None:
-            if prev.repeat_line is not None and span.repeat_line is not None and _same_original(prev, span, out):
-                prev.end, prev.lines = span.end, prev.lines + span.lines
-            else:
-                out.append(span)
-        elif prev.original == span.original and prev.seconds() < low and span.end - prev.start <= high:
+        elif prev.seconds() < low and span.end - prev.start <= high:
             prev.end, prev.lines = span.end, prev.lines + span.lines
         else:
             out.append(span)
     return out
+
+
+def _scene_runs(spans: list[_Span]) -> list[_Span]:
+    """By scene: neighbouring picture and music spans of one sequence become one run, cut into shots by time,
+    so a shot follows the scene and not a lyric line. Sung and number lines keep their own shots."""
+    free = (ShotKind.ILLUSTRATE, ShotKind.UNCLEAR, ShotKind.MUSIC)
+    out: list[_Span] = []
+    for span in spans:
+        prev = out[-1] if out else None
+        if prev is not None and prev.kind in free and span.kind in free and prev.seq == span.seq:
+            prev.end, prev.lines = span.end, prev.lines + span.lines
+        else:
+            out.append(span)
+    return out
+
+
+def _sung_in(start: float, end: float, run: list[int], lines: dict[int, LyricLine]) -> list[int]:
+    """The lines of a run sung during one of its shots: those with half a second, or half of themselves, in it."""
+    return [i for i in run
+            if min(end, lines[i].end) - max(start, lines[i].start) >= min(0.5, (lines[i].end - lines[i].start) / 2) - 1e-9]
 
 
 def _pieces(span: _Span, beats: list[float], low: float, high: float) -> list[tuple[float, float]]:
@@ -123,30 +138,40 @@ def _pieces(span: _Span, beats: list[float], low: float, high: float) -> list[tu
         count = min(math.ceil(span.seconds() / high - 1e-9), math.floor(span.seconds() / low + 1e-9))
     count = max(1, count)
     step = span.seconds() / count
+    sung = span.kind in (ShotKind.SUNG, ShotKind.NUMBER)
     cuts = [span.start]
     for k in range(1, count):
-        cut = _snap(span.start + k * step, beats, earlier_only=False)
-        cuts.append(cut if cut - cuts[-1] >= MIN_SLOT else span.start + k * step)
+        plain = span.start + k * step
+        cut = _snap(plain, beats, earlier_only=False)
+        if cut - cuts[-1] < MIN_SLOT or (sung and max(cut - cuts[-1], plain + step - cut) > SUNG_MAX):
+            cut = plain
+        cuts.append(cut)
     cuts.append(span.end)
     return list(zip(cuts, cuts[1:]))
 
 
 def make_slots(lines: list[LyricLine], lesson_lines: list[LessonLine], beats: list[float], duration: float,
-               shot_seconds: list[float]) -> list[Slot]:
+               shot_seconds: list[float], sequences: list[LessonSequence] | None = None,
+               by_scene: bool = False) -> list[Slot]:
     """Cut the song into shots: each line split to the band's shot length on the beat, sung and number
-    lines kept whole up to SUNG_MAX, and a repeated chorus line pointed at the shot it copies."""
+    lines kept whole up to SUNG_MAX, and no shot across two sequences. A chorus sung again gets shots of
+    its own, never a copy of the first chorus's. by_scene: the pictures of a sequence are cut by time alone,
+    so they follow the scene's steps and not its lines; each shot lists the lines sung during it."""
     low, high = shot_seconds
     lesson = {l.index: l for l in lesson_lines}
-    spans = _merge_short(_spans(lines, lesson, beats, duration, low), low, high)
-    slots, by_line = [], {}
+    by_index = {l.index: l for l in lines}
+    seq_of = {i: k for k, q in enumerate(sequences or []) for i in range(q.first_line, q.last_line + 1)}
+    spans = _spans(lines, lesson, beats, duration, low, seq_of)
+    spans = _scene_runs(spans) if by_scene else _merge_short(spans, low, high)
+    slots = []
     for span in spans:
-        for k, (start, end) in enumerate(_pieces(span, beats, low, high)):
-            slot = Slot(id=f"s{len(slots) + 1:02d}", start=round(start, 3), end=round(end, 3), lines=span.lines,
-                        kind=span.kind, number_text=span.number_text)
-            if span.repeat_line is not None:
-                originals = by_line[span.repeat_line]
-                slot.repeat_of = originals[min(k, len(originals) - 1)]
-            for index in span.lines:
-                by_line.setdefault(index, []).append(slot.id)
-            slots.append(slot)
+        run = by_scene and span.kind not in (ShotKind.SUNG, ShotKind.NUMBER)
+        for start, end in _pieces(span, beats, low, high):
+            sung = _sung_in(start, end, span.lines, by_index) if run else span.lines
+            kind = span.kind
+            if run:
+                kind = (ShotKind.MUSIC if not sung else ShotKind.UNCLEAR
+                        if all(lesson[i].tag == LineTag.UNCLEAR for i in sung) else ShotKind.ILLUSTRATE)
+            slots.append(Slot(id=f"s{len(slots) + 1:02d}", start=round(start, 3), end=round(end, 3),
+                              lines=sung, kind=kind, number_text=span.number_text, sequence=span.seq))
     return slots
