@@ -15,12 +15,11 @@ from src.repository.song.song_repository import SongRepository
 from src.schema.asset.asset_schema import Asset, ReviewState
 from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
-from src.schema.run.stage_state_schema import StageState
 from src.schema.two_d.script_schema import DrawingKind
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.two_d.render.painter import Painter
 from src.service.two_d.render.timeline import frame_at, scenes_of
-from src.service.stage.stage_common import fail_stage
+from src.service.stage.stage_common import fail_stage, start_stage
 from src.service.two_d.common import script_of
 from src.service.storage.storage_service import Storage
 
@@ -53,6 +52,8 @@ class RenderService:
             raise LookupError(f"Run {run_id} not found")
         board = script_of(self._runs, run_id)
         beats = [b for b in board.beats if until is None or b.start < until]
+        if not beats:
+            raise ValueError("--until is before the first beat")
         width, height, fps = self._settings.assembly_width, self._settings.assembly_height, self._settings.assembly_fps
         scenes = scenes_of(board, beats, width / height)
         looping = self._runs.stage(run_id, StageName.LOOPS)
@@ -75,10 +76,7 @@ class RenderService:
         if state is not None and not force and state.status == StageStatus.DONE and state.input_hash == key:
             logger.info("render %s: reused, inputs unchanged", run_id[:8])
             return self._assets.assets.get(state.output["film"])
-        state = state or self._runs.stage_states.add(StageState(run_id=run_id, stage=STAGE))
-        state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
-        state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
-        state = self._runs.stage_states.update(state)
+        state = start_stage(self._runs, state, run_id, STAGE, key)
         seconds, frames = beats[-1].end, round(beats[-1].end * fps)
         logger.info("render %s: %d beats, %.1f s, %d frames at %dx%d, %d drawings and %d loops", run_id[:8], len(beats),
                     seconds, frames, width, height, len(stills), len(loops))
@@ -142,6 +140,7 @@ class RenderService:
         in memory."""
         clip, raw = folder / f"{name}.webm", folder / f"{name}.rgba"
         clip.write_bytes(self._storage.get(loop.params["cut"]))
-        self._ffmpeg.run(["-c:v", "libvpx-vp9", "-i", str(clip), "-vf", f"scale={SPRITE_PX}:{SPRITE_PX}", "-f", "rawvideo",
+        self._ffmpeg.run(["-c:v", "libvpx-vp9", "-i", str(clip), "-vf",
+                          f"fps={self._settings.assembly_fps},scale={SPRITE_PX}:{SPRITE_PX}", "-f", "rawvideo",
                           "-pix_fmt", "rgba", str(raw)])
         return np.memmap(raw, dtype=np.uint8, mode="r").reshape(-1, SPRITE_PX, SPRITE_PX, 4)

@@ -24,10 +24,31 @@ def export_beside(audio_path: str) -> dict | None:
     return read_export(export) if export.is_file() else None
 
 
+def _number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _check_timing(timing: list[dict]) -> None:
+    """Every line and word has the numbers it needs, so a bad export is named, not a bare KeyError."""
+    for li, line in enumerate(timing):
+        for key in ("startTime", "endTime"):
+            if not _number(line.get(key)):
+                raise ValueError(f"line {li} of JamWise's lineTiming has no numeric {key}")
+        if not isinstance(line.get("words"), list):
+            raise ValueError(f"line {li} of JamWise's lineTiming has no words list")
+        for wi, w in enumerate(line["words"]):
+            for key in ("start", "end"):
+                if not _number(w.get(key)):
+                    raise ValueError(f"line {li} word {wi} of JamWise's lineTiming has no numeric {key}")
+        if line["endTime"] < line["startTime"]:
+            raise ValueError(f"line {li} of JamWise's lineTiming ends before it starts")
+
+
 def jamwise_lines(timing: list[dict], lyrics: list[str], duration: float) -> tuple[list[TimedWord], list[LyricLine]]:
     """JamWise's own line and word timing as our timed lyrics, checked against the lyrics and the audio."""
     if len(timing) != len(lyrics):
         raise ValueError(f"JamWise timed {len(timing)} lines, the lyrics have {len(lyrics)}")
+    _check_timing(timing)
     words, lines = [], []
     for li, (text, line) in enumerate(zip(lyrics, timing)):
         written, timed = text.split(), line["words"]

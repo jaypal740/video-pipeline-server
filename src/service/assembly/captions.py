@@ -45,6 +45,8 @@ Screen = tuple[float, float, tuple[str, ...], str]
 def sung_at(text: str, words: list[TimedWord]) -> float | None:
     """When a key word starts being sung: the start of the first timed word that begins it."""
     want = _WORD.findall(text.lower())
+    if not want:                                      # a key word of no letters or digits is never sung
+        return None
     tokens = [(token, w.start) for w in words for token in _WORD.findall(w.text.lower())]
     for i in range(len(tokens) - len(want) + 1):
         if [token for token, _ in tokens[i:i + len(want)]] == want:

@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     spend_cap_usd: float = Field(default=25.0, validation_alias="PIPELINE_SPEND_CAP_USD")
     log_level: str = Field(default="INFO", validation_alias="PIPELINE_LOG_LEVEL")
     log_dir: str | None = Field(default="data/logs", validation_alias="PIPELINE_LOG_DIR")
+    # Claude calls: how long one call may take and how often the SDK retries a transport error (its own defaults).
+    llm_timeout_s: float = Field(default=600.0, validation_alias="PIPELINE_LLM_TIMEOUT_S")
+    llm_max_retries: int = Field(default=2, validation_alias="PIPELINE_LLM_MAX_RETRIES")
     lesson_model: str = Field(default="claude-opus-5-5", validation_alias="PIPELINE_LESSON_MODEL")
     storyboard_model: str = Field(default="claude-opus-5-5", validation_alias="PIPELINE_STORYBOARD_MODEL")
     # The judge that looks at frames of the whole 2D film, with the lesson beside them, before loops are made.

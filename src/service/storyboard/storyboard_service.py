@@ -16,10 +16,10 @@ from src.schema.lesson.lesson_schema import LessonSequence
 from src.schema.storyboard.storyboard_schema import (BoardHeader, CastKind, CastMember, SequencePlaces, ShotDraft,
                                                      ShotPatch, Slot, SoundOffReview, SoundOffWatch, Storyboard,
                                                      StoryboardDraft)
-from src.service.intake.intake_jamwise import export_beside
 from src.service.lesson.lesson_rules import band_rules, format_rules
 from src.service.llm.llm_service import LlmCall, LlmError, LlmService
-from src.service.stage.stage_common import REALISTIC, add_llm_cost, fail_stage, require_film_type
+from src.service.stage.stage_common import (REALISTIC, add_llm_cost, analysis_of, export_of, fail_stage, require_film_type, run_of,
+                                            start_stage)
 from src.service.storyboard.storyboard_prompt import (PROMPT_VERSION, REVIEW_SYSTEM, STAR_SYSTEM, SYSTEM,
                                                       WATCH_SYSTEM, header_prompt, review_prompt,
                                                       rewrite_note, sequence_prompt, user_prompt, watch_prompt)
@@ -55,13 +55,13 @@ class StoryboardService:
         self._settings = settings
 
     def run(self, run_id: str, model: str | None = None, force: bool = False) -> Storyboard:
-        run = self._run(run_id)
+        run = run_of(self._runs, run_id)
         require_film_type(self._runs, run.id, REALISTIC)
         plan = self._plan(run)
-        analysis = self._analysis(run)
+        analysis = analysis_of(self._songs, run)
         band, fmt = band_rules(plan.grade_band), format_rules(plan.video_type)
         export = (None if plan.film_type == FilmType.NARRATION      # a narration film has the grade's host
-                  else export_beside(self._songs.songs.get(run.song_id).audio_path))
+                  else export_of(self._songs, run))
         # A JamWise song has its own singer, made for it: she is the star, and our host is not used.
         host, wardrobe = (None if export else host_for(plan.grade_band)), wardrobe_for(plan.grade_band)
         system = STAR_SYSTEM if export else SYSTEM
@@ -83,10 +83,7 @@ class StoryboardService:
         logger.info("storyboard %s: %s, grades %s, %s, %d slots, %d sung, %d number", run.id[:8], model,
                     band.band, fmt.type, len(slots), sum(s.kind == "sung" for s in slots),
                     sum(s.kind == "number" for s in slots))
-        state = state or self._runs.stage_states.add(StageState(run_id=run.id, stage=StageName.STORYBOARD))
-        state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
-        state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
-        state = self._runs.stage_states.update(state)
+        state = start_stage(self._runs, state, run.id, StageName.STORYBOARD, key)
         spent, reasks, done, kept = 0.0, 0, [], []
         try:
             header, call = self._llm.parse(
@@ -158,7 +155,7 @@ class StoryboardService:
         the whole board is checked, and a sequence that does not join up with the one before it is written
         again with the others in view. Returns the shots, notes on sequences kept with problems, the cost
         and the number of re-asks."""
-        def write(k: int) -> tuple[ShotPatch | None, LlmError | None, LlmCall]:
+        def write(k: int) -> tuple[ShotPatch | None, Exception | None, LlmCall | None]:
             own = [s for s in slots if s.sequence == k]
             todo = sorted(wanted(own))
             check = lambda patch: self._sequence_problems(patch, header, [], own, set(todo), band, fmt, None,
@@ -170,17 +167,24 @@ class StoryboardService:
                 return patch, None, call
             except LlmError as exc:
                 return exc.output, exc, exc.call
+            except Exception as exc:                      # one sequence's failure must not lose the others
+                return None, exc, None
 
         with ThreadPoolExecutor(max_workers=len(sequences)) as pool:
             written = list(pool.map(write, range(len(sequences))))
         done, kept, spent, reasks = [], [], 0.0, 0
+        for _, _, call in written:                        # every call that finished is paid for, whatever came of it
+            if call is not None:
+                spent += add_llm_cost(self._assets, run_id, StageName.STORYBOARD, call)
+                reasks += call.attempts - 1
         for k, (patch, error, call) in enumerate(written):
-            spent += add_llm_cost(self._assets, run_id, StageName.STORYBOARD, call)
-            reasks += call.attempts - 1
             todo = wanted([s for s in slots if s.sequence == k])
             if patch is None or {s.slot for s in patch.shots} != todo:
-                state.output = {"draft": _draft(header, done).model_dump(mode="json"), "sequence": k + 1}
-                raise error
+                kept_shots = [shot for j, (p, _, _) in enumerate(written) if p is not None
+                              and {s.slot for s in p.shots} == wanted([s for s in slots if s.sequence == j])
+                              for shot in p.shots]
+                state.output = {"draft": _draft(header, kept_shots).model_dump(mode="json"), "sequence": k + 1}
+                raise error or ValueError(f"sequence {k + 1} did not cover its slots")
             if error is not None:
                 kept.append(f"sequence {k + 1} kept after {call.attempts} tries with unresolved problems: "
                             + "; ".join(error.problems))
@@ -206,7 +210,7 @@ class StoryboardService:
                 logger.warning("storyboard %s: %s", run_id[:8], kept[-1])
                 continue
             spent += add_llm_cost(self._assets, run_id, StageName.STORYBOARD, call)
-            reasks += call.attempts
+            reasks += call.attempts - 1
             new = {s.slot: s for s in patch.shots}
             done = [new.get(s.slot, s) for s in done]
             logger.info("storyboard %s: sequence %d written again to join the one before it", run_id[:8], k + 1)
@@ -228,12 +232,18 @@ class StoryboardService:
         for watching in range(1 + SOUND_OFF_REWRITES):
             if not rewritten:
                 break
-            watched, call = self._llm.parse(model, WATCH_SYSTEM, watch_prompt(_draft(header, done), slots, count),
-                                            SoundOffWatch, check=cover)
-            spent += add_llm_cost(self._assets, run_id, StageName.STORYBOARD, call)
-            review, call = self._llm.parse(model, REVIEW_SYSTEM, review_prompt(sequences, watched), SoundOffReview,
-                                           check=cover)
-            spent += add_llm_cost(self._assets, run_id, StageName.STORYBOARD, call)
+            try:
+                watched, call = self._llm.parse(model, WATCH_SYSTEM, watch_prompt(_draft(header, done), slots, count),
+                                                SoundOffWatch, check=cover)
+                spent += add_llm_cost(self._assets, run_id, StageName.STORYBOARD, call)
+                review, call = self._llm.parse(model, REVIEW_SYSTEM, review_prompt(sequences, watched),
+                                               SoundOffReview, check=cover)
+                spent += add_llm_cost(self._assets, run_id, StageName.STORYBOARD, call)
+            except LlmError as exc:                       # the check is optional: keep the board as it is
+                spent += add_llm_cost(self._assets, run_id, StageName.STORYBOARD, exc.call)
+                notes.append(f"sound off: the check could not be done ({exc})")
+                logger.warning("storyboard %s: sound off check failed, board kept without it: %s", run_id[:8], exc)
+                break
             learned = {w.sequence: w.learned for w in watched.sequences}
             unclear = [v for v in sorted(review.sequences, key=lambda v: v.sequence)
                        if v.sequence - 1 in rewritten and not v.clear and sequences[v.sequence - 1].steps]
@@ -322,23 +332,11 @@ class StoryboardService:
                     len(problems))
         return problems
 
-    def _run(self, run_id: str) -> Run:
-        run = self._runs.runs.get(run_id)
-        if run is None:
-            raise LookupError(f"Run {run_id} not found")
-        return run
-
     def _plan(self, run: Run) -> LessonPlan:
         state = self._runs.stage(run.id, StageName.LESSON)
         if state is None or state.status != StageStatus.DONE:
             raise ValueError(f"Run {run.id} has no lesson plan; run the lesson stage first")
         return LessonPlan(**state.output)
-
-    def _analysis(self, run: Run) -> SongAnalysis:
-        song = self._songs.songs.get(run.song_id)
-        if song is None or song.analysis_id is None:
-            raise LookupError(f"Run {run.id}'s song has not been analysed; run intake on it first")
-        return self._songs.analyses.get(song.analysis_id)
 
 
 def _draft(header: BoardHeader, shots: list[ShotDraft]) -> StoryboardDraft:

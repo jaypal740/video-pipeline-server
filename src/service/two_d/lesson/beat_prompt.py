@@ -1,7 +1,7 @@
 from src.schema.lesson.lesson_schema import GradeBand
 from src.schema.song.song_analysis_schema import LyricLine
 from src.service.two_d.lesson.beat_rules import HERO_MAX_SECONDS, MAX_BEAT_LINES, MAX_BEAT_SECONDS, hero_limit, repeats
-from src.service.lesson.lesson_prompt import featured_terms
+from src.service.lesson.lesson_prompt import featured_terms, package_facts
 from src.service.lesson.lesson_rules import band_rules
 
 # Bumped whenever the prompt changes, so every run is planned again with the new prompt.
@@ -47,22 +47,14 @@ def jamwise_direction(export: dict) -> str:
     brief, package = export.get("creativeBrief") or {}, export.get("contentPackage") or {}
     parts = ["The song was written from this plan. Follow its topics, terms and numbers, but check every fact: "
              "where the plan is wrong, teach what is true."]
-    parts += [f"- Learning goal: {g}" for g in package.get("learningObjectives", [])]
-    parts += [f"- Scene {s.get('id')}: {s.get('title')}: teaches {s.get('teaches')}" for s in brief.get("scenes", [])]
+    parts += [f"- Learning goal: {g}" for g in package.get("learningObjectives") or []]
+    parts += [f"- Scene {s.get('id')}: {s.get('title')}: teaches {s.get('teaches')}" for s in brief.get("scenes") or []]
     parts += [f"- Section {s.get('section')}: {s.get('educationalFocus')}"
               + (f" Key moments: {'; '.join(s['keyMoments'])}" if s.get("keyMoments") else "")
-              for s in brief.get("sectionPlans", [])]
+              for s in brief.get("sectionPlans") or []]
     parts += [f"- Number: {a.get('statistic')}" + (f" Shown as: {a['visual']}" if a.get("visual") else "")
-              for a in brief.get("numberAnchors", [])]
-    parts += [f"- Fact: {f.get('kidVersion') or f.get('fact')} {f.get('explanation') or ''}".rstrip()
-              for f in package.get("keyFacts", [])]
-    parts += [f"- Wrong idea to avoid: {f.get('misconception')}" for f in package.get("keyFacts", [])
-              if f.get("misconception")]
-    parts += [f"- Term {c.get('term')}: {c.get('kidDefinition')}"
-              + (f" Not to be confused with: {'; '.join(c['nonExamples'])}" if c.get("nonExamples") else "")
-              for c in package.get("vocabularyCards", []) if c.get("term")]
-    parts += [f"- How to show {m.get('concept')}: {m.get('visualDemonstration')}"
-              for m in brief.get("teachingMoments", []) if m.get("concept")]
+              for a in brief.get("numberAnchors") or []]
+    parts += package_facts(package, brief)
     chorus = (brief.get("visualWorld") or {}).get("chorusVisual")
     parts += [f"- How to show the chorus: {chorus}"] if chorus else []
     parts += [f"- How the video ends: {brief['loopVisual']}"] if brief.get("loopVisual") else []

@@ -211,17 +211,17 @@ def jamwise_pictures(export: dict) -> str | None:
     """How JamWise planned to show what the song teaches: each scene's place and demonstration, the chorus
     picture and the ending. The script follows these directly, so nothing is lost on the way through the lesson."""
     brief = export.get("creativeBrief") or {}
-    shown = {m.get("sceneId"): m.get("visualDemonstration") for m in brief.get("teachingMoments", [])}
+    shown = {m.get("sceneId"): m.get("visualDemonstration") for m in brief.get("teachingMoments") or []}
     parts = [f"- Scene {s.get('id')}, {s.get('title')}" + (f", set in {s['place']}" if s.get("place") else "")
              + f": teaches {s.get('teaches')}. Shown as: "
              f"{shown.get(s.get('id')) or (s.get('teachingMoment') or {}).get('visualDemonstration')}"
-             for s in brief.get("scenes", []) if s.get("teaches")]
+             for s in brief.get("scenes") or [] if s.get("teaches")]
     world = brief.get("visualWorld") or {}
     parts += [f"- The world: {world[k]}" for k in ("primarySetting", "secondarySetting") if world.get(k)]
     chorus = world.get("chorusVisual")
     parts += [f"- Chorus picture: {chorus}"] if chorus else []
-    parts += [f"- {a.get('statistic')}: {a.get('visual')}" for a in brief.get("numberAnchors", []) if a.get("visual")]
-    parts += [f"- Section {s.get('section')}: {'; '.join(s['keyMoments'])}" for s in brief.get("sectionPlans", [])
+    parts += [f"- {a.get('statistic')}: {a.get('visual')}" for a in brief.get("numberAnchors") or [] if a.get("visual")]
+    parts += [f"- Section {s.get('section')}: {'; '.join(s['keyMoments'])}" for s in brief.get("sectionPlans") or []
               if s.get("keyMoments")]
     parts += [f"- Ending: {brief['loopVisual']}"] if brief.get("loopVisual") else []
     if not parts:

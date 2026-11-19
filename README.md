@@ -27,6 +27,8 @@ poetry run pytest -q
 ```bash
 # 1. Add a song and analyse it (stage 1). A song is analysed once; every run made from it reuses the analysis.
 poetry run python main.py song add --name antibiotic-resistance --audio audio.mp3 --lyrics lyrics.txt
+# or, for a JamWise song, its job export instead of --lyrics (give exactly one of the two; a temporary intake):
+#   poetry run python main.py song add --name water-cycle --audio audio.mp3 --jamwise export.json
 poetry run python main.py song analyse antibiotic-resistance
 poetry run python main.py song preview antibiotic-resistance     # check video: words highlighted as said, beat ticks
 
@@ -50,6 +52,23 @@ poetry run python main.py run assemble   <run_id>   # stage 6
 Every stage command takes `--force` to run again even when its inputs haven't changed. `run lesson` also
 takes `--model` and `--type` (`concept`, `process`, `journey`, `personalised_hero`), and `run storyboard`
 takes `--model`.
+
+`run lesson` also takes `--film` (`narration` or `music_video`; a JamWise song defaults to `music_video`).
+A song with its own singer is sung by her in the sheets, video and lip-sync stages, with real footage for
+the key science, and assembly adds the lyric captions.
+
+### 2D films
+
+A song can instead become a 2D motion-graphics film. The stages run under `run 2d`, in this order:
+
+```bash
+poetry run python main.py run 2d lesson     <run_id>   # the teaching beats
+poetry run python main.py run 2d storyboard <run_id>   # the animation script
+poetry run python main.py run 2d drawings   <run_id>   # each drawing, made once
+poetry run python main.py run 2d check      <run_id>   # a judge looks at the whole film before loops are made
+poetry run python main.py run 2d loops      <run_id>   # a short moving loop for each drawing that moves
+poetry run python main.py run 2d render     <run_id>   # the film, painted by code
+```
 
 ### Other commands
 

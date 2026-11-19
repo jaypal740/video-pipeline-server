@@ -22,8 +22,8 @@ from src.service.llm.llm_service import LabelledImage, LlmCall, LlmService
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.sheet.sheet_prompt import REAL, Style
 from src.service.sheet.sheet_service import USABLE
-from src.service.stage.stage_common import (PASSED, StopLoss, add_cost, asset_urls, keep_best, storyboard_of,
-                                            write_correction)
+from src.service.stage.stage_common import (PASSED, StopLoss, add_cost, asset_urls, keep_best, start_stage,
+                                            storyboard_of, write_correction)
 from src.service.storage.storage_service import Storage
 from src.service.storyboard.storyboard_rules import real_shots
 from src.service.video.camera_move import dissolve_filter, move_filter
@@ -111,10 +111,7 @@ class VideoService:
         if state is not None and not force and state.status == StageStatus.DONE and state.input_hash == key:
             logger.info("video %s: reused, inputs unchanged", run_id[:8])
             return {s: self._assets.assets.get(a) for s, a in state.output["clips"].items()}
-        state = state or self._runs.stage_states.add(StageState(run_id=run_id, stage=StageName.VIDEO))
-        state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
-        state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
-        state = self._runs.stage_states.update(state)
+        state = start_stage(self._runs, state, run_id, StageName.VIDEO, key)
         logger.info("video %s: %s, %d clips to draw (%d with an end frame), %d camera moves, %d blocked by "
                     "keyframes, %d repeats reused", run_id[:8], model, len(plans), sum(1 for p in plans if p[-1]),
                     len(moves), len(blocked), len(board.shots) - len(shots))
@@ -160,6 +157,7 @@ class VideoService:
         cast = {c.id: c for c in board.cast}
         places = {p.id: p for p in board.places}
         shots = {s.id: s for s in board.shots if s.repeat_of is None}
+        real = real_shots(board.cast, board.shots)
         tries = [t for shot_id in shots if (owner := self._owner(state, shot_id)) is not None
                  for t in self._assets.assets.list(run_id=owner, stage=StageName.VIDEO, target_id=shot_id)]
         self._errors = {k: v for k, v in state.output.get("errors", {}).items() if k not in shots}
@@ -167,7 +165,7 @@ class VideoService:
             if asset.review in PASSED:
                 continue
             shot = shots[asset.target_id]
-            subjects = [cast[s] for s in shot.subjects]
+            subjects = [] if shot.id in real else [cast[s] for s in shot.subjects]
             brief = clip_brief(shot, places[shot.place], subjects)
             data = self._storage.get(asset.path)
             checks = self._checks.check(data, asset.params["seconds_requested"])

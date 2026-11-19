@@ -67,10 +67,12 @@ class FakeFal:
     name = "fal"
 
     def __init__(self):
-        self.calls, self.whole = [], False
+        self.calls, self.whole, self.explode_at = [], False, None
 
     def generate(self, model, prompt, refs, aspect, seed, thinking="medium"):
         self.calls.append((prompt, len(refs)))
+        if len(self.calls) == self.explode_at:
+            raise RuntimeError("the image service fell over")
         colour = (seed % 200, (seed * 7) % 200, 40)
         data = picture(colour, aspect, box=(0, 0, 32, 32) if self.whole else (8, 8, 24, 24))
         return ImageReply(data=data, content_type="image/png", model=model, seed=seed, cost_usd=0.044)
@@ -241,6 +243,21 @@ def test_a_stored_drawing_that_no_longer_cuts_out_is_drawn_again(container, stag
     again = service.run(run.id, force=True)
     assert again["dish"].path != first["dish"].path and again["dish"].review == ReviewState.PASSED
     assert again["dot"].path == first["dot"].path and len(fal.calls) > 7
+
+
+def test_one_drawing_that_raises_does_not_discard_the_others_paid_for_and_a_re_run_reuses_them(container, stage):
+    service, fal, _, run = stage
+    fal.explode_at = 2
+    with pytest.raises(RuntimeError, match="fell over"):
+        service.run(run.id)
+    kept = container.asset_repository().assets.list(run_id=run.id)
+    assert len(kept) == 3 and all(a.review == ReviewState.PASSED for a in kept)       # the other three of the first round
+    assert container.asset_repository().run_cost(run.id) == pytest.approx(3 * 0.045)
+    assert container.run_repository().stage(run.id, StageName.VISUAL_IDENTITY).status == StageStatus.FAILED
+    fal.explode_at = None
+    made = service.run(run.id)
+    assert len(made) == 7 and len(fal.calls) == 4 + 4                                  # only the lost one and the poses
+    assert sum(a.params.get("reused_from") is not None for a in made.values()) == 3
 
 
 def test_a_drawing_the_judge_fails_is_drawn_again_told_what_was_wrong(container, stage):

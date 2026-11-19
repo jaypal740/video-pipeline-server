@@ -183,6 +183,10 @@ class FilmCheckService:
         except (LlmError, ValueError) as exc:
             logger.warning("film check %s: no usable repair, keeping the script: %s", run_id[:8], exc)
             again = None
+        except Exception:
+            self._storyboard.restore(run_id, board)
+            self._drawings.run(run_id)
+            raise
         if again is None or len(again) > len(problems):
             self._storyboard.restore(run_id, board)
             self._drawings.run(run_id)

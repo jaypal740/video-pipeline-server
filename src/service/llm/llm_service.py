@@ -40,6 +40,10 @@ class LlmError(Exception):
         self.call, self.output, self.problems = call, output, problems or []
 
 
+class LlmTruncated(LlmError):
+    """The answer hit the output limit; the same prompt would hit it again, so it is never retried."""
+
+
 class LlmRefusal(Exception):
     """The model declined; raised by a provider and never retried."""
 
@@ -83,6 +87,15 @@ class LlmService:
                 reply = provider.parse(model, system, prompt, output_type, effort)
             except LlmRefusal as exc:
                 raise LlmError(f"{model} refused: {exc}", call) from exc
+            except LlmError as exc:                       # the provider spent tokens on an unusable answer
+                call.input_tokens += exc.call.input_tokens
+                call.output_tokens += exc.call.output_tokens
+                call.cost_usd += exc.call.cost_usd
+                if isinstance(exc, LlmTruncated):
+                    raise LlmError(str(exc), call, problems=exc.problems) from exc
+                problems = exc.problems or [str(exc)]
+                logger.warning("%s attempt %d gave no usable answer, asking again: %s", model, call.attempts, exc)
+                continue
             call.input_tokens += reply.input_tokens
             call.output_tokens += reply.output_tokens
             call.cost_usd += reply.cost_usd

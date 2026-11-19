@@ -41,6 +41,8 @@ def cut_frames(frames: np.ndarray, sink: BinaryIO) -> tuple[float, float, int, l
     """Cut every frame (n, height, width, 3) out and write it to `sink` as raw RGBA. Returns the gap, the
     motion, the index of the frame furthest from the first (by its whole picture, which tells two frames
     apart when their busiest parts have both changed completely), and the frames that are no cut-outs."""
+    if not len(frames):                                         # nothing was read: no loop to cut
+        return 0.0, 0.0, 0, ["no frames could be read"]
     first, far, whole, uncut = frames[0].astype(np.float32), [], [], []
     for frame in frames:
         rgba, found = cut(frame)
@@ -81,7 +83,8 @@ class LoopCutService:
             clip.write_bytes(data)
             info = self._ffmpeg.probe(clip)
             width, height = info["width"], info["height"]
-            frames = np.frombuffer(self._ffmpeg.run(["-i", str(clip), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]),
+            frames = np.frombuffer(self._ffmpeg.run(["-i", str(clip), "-s", f"{width}x{height}", "-f", "rawvideo",
+                                                  "-pix_fmt", "rgb24", "-"]),
                                    dtype=np.uint8).reshape(-1, height, width, 3)
             with raw.open("wb") as sink:
                 gap, motion, furthest, uncut = cut_frames(frames, sink)
@@ -93,5 +96,7 @@ class LoopCutService:
                                   "-i", str(raw), "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "24",
                                   "-auto-alt-ref", "0", str(out)])
             picture = io.BytesIO()
+            if not len(frames):                                 # nothing to show the judge, and nothing is judged
+                return check, None, picture.getvalue()
             Image.fromarray(frames[furthest]).save(picture, format="PNG")
             return check, None if uncut else out.read_bytes(), picture.getvalue()

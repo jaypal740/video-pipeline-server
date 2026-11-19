@@ -6,7 +6,7 @@ from src.schema.song.song_analysis_schema import LyricLine, TimedWord
 from src.schema.lesson.lesson_schema import KeyTerm, LessonLine, LessonPlan, LineTag
 from src.schema.storyboard.storyboard_schema import Position
 from src.service.assembly.assembly_service import keyword_pops, screen_words
-from src.service.assembly.captions import ACTIVE, BOX, INK, PLATE, SUNG, UPCOMING, caption_image, caption_states
+from src.service.assembly.captions import ACTIVE, BOX, INK, PLATE, SUNG, UPCOMING, caption_image, caption_states, sung_at
 
 LINES = [LyricLine(index=0, text="The Sun shines", start=1.0, end=2.5, confidence=0.9),
          LyricLine(index=1, text="On us", start=4.0, end=5.0, confidence=0.9)]
@@ -103,3 +103,8 @@ def test_a_film_whose_lesson_has_no_key_words_is_drawn_as_before():
     assert keyword_pops(lesson(None, None), WORDS, shots) == [] and keyword_pops(None, WORDS, shots) == []
     assert screen_words(shots) == [(0.0, 3.0, ("core",), "right")]
     assert all(pop is None for *_, pop in caption_states(LINES, WORDS, offset=0.0, length=5.0))
+
+
+def test_a_key_word_with_no_letters_or_digits_is_never_sung_and_does_not_fail():
+    assert sung_at("!!", WORDS) is None and sung_at("!!", []) is None
+    assert sung_at("sun", WORDS) == 1.5

@@ -25,8 +25,8 @@ from src.service.keyframe.keyframe_prompt import (LINK_LABEL, START_LABEL, end_b
 from src.service.sheet.sheet_prompt import PLATE, REAL, Style
 from src.service.image.image_prices import image_model
 from src.service.sheet.sheet_service import USABLE, SheetService
-from src.service.stage.stage_common import (PASSED, StopLoss, add_cost, asset_urls, keep_best, storyboard_of,
-                                            write_correction)
+from src.service.stage.stage_common import (PASSED, StopLoss, add_cost, asset_urls, keep_best, start_stage,
+                                            storyboard_of, write_correction)
 from src.service.storage.storage_service import Storage
 from src.service.storyboard.storyboard_rules import HOST, real_shots
 
@@ -146,10 +146,7 @@ class KeyframeService:
         if state is not None and not force and state.status == StageStatus.DONE and state.input_hash == key:
             logger.info("keyframes %s: reused, inputs unchanged", run_id[:8])
             return {s: self._assets.assets.get(a) for s, a in state.output["keyframes"].items()}
-        state = state or self._runs.stage_states.add(StageState(run_id=run_id, stage=StageName.KEYFRAMES))
-        state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
-        state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
-        state = self._runs.stage_states.update(state)
+        state = start_stage(self._runs, state, run_id, StageName.KEYFRAMES, key)
         shots = sum(len(c) for c in chains)
         logger.info("keyframes %s: %s, %d shots in %d chains, %d repeats reused", run_id[:8], model, shots,
                     len(chains), len(board.shots) - shots)

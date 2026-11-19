@@ -3,7 +3,7 @@ import pytest
 from src.schema.lesson.lesson_schema import (GradeBand, KeyTerm, LessonDraft, LessonLine, LessonSequence, LineTag,
                                              VideoType)
 from src.schema.song.song_analysis_schema import LyricLine
-from src.service.lesson.lesson_prompt import jamwise_direction, sequence_limit, user_prompt
+from src.service.lesson.lesson_prompt import MAX_SEQUENCES, jamwise_direction, scene_ids, sequence_limit, user_prompt
 from src.service.lesson.lesson_rules import (allowed_types, band_for, band_rules, clear_keywords, face_limit,
                                              format_rules, problems, repeats, scene_notes, sequence_problems,
                                              chorus_lines, sing_the_chorus)
@@ -215,3 +215,12 @@ def test_sequences_that_leave_the_plans_scenes_are_noted():
         "the sequences take the plan's scenes in the order [2, 1, 3], not the plan's [1, 2, 3]"]
     notes = scene_notes(built([1], [7]), [1, 2])
     assert "scene 7, which the plan does not have" in notes[0] and notes[1].endswith("scene(s) [2]")
+
+
+def test_a_jamwise_plan_with_null_lists_is_read_as_empty():
+    export = {"creativeBrief": {"scenes": None, "cast": None, "sectionPlans": None, "numberAnchors": None,
+                                "teachingMoments": None, "featuredTerms": None},
+              "contentPackage": {"keyFacts": None, "vocabularyCards": None, "learningObjectives": None},
+              "sections": None}
+    assert scene_ids(export) == [] and sequence_limit(export) == MAX_SEQUENCES
+    assert "Learning goal" not in jamwise_direction(export)

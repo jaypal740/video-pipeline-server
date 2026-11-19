@@ -24,6 +24,8 @@ class SongService:
             raise ValueError(f"Audio file {audio} not found")
         if jamwise is not None:
             lyrics = read_export(jamwise)["lyrics"]
+        if lyrics is None:
+            raise ValueError("lyrics or a JamWise export is required")
         if not clean_lyrics(lyrics):
             raise ValueError("The lyrics have no lines to align")
         song = Song(name=name, audio_path="", lyrics=lyrics)

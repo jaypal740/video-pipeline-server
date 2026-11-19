@@ -1,7 +1,8 @@
 import fal_client
+import httpx
 import pytest
 
-from src.service.video import fal_video_service as module
+from src.service.image import fal_queue
 from src.service.video.fal_video_service import FalVideoService
 from src.service.video.video_prices import video_model
 
@@ -43,8 +44,8 @@ class FakeReply:
 def make(monkeypatch, client, fallback="minimax-h3-max-turbo", content_type="video/mp4"):
     service = FalVideoService(api_key="x", fallback_model=fallback)
     monkeypatch.setattr(service, "_get_client", lambda: client)
-    monkeypatch.setattr(module.httpx, "get", lambda url, timeout, follow_redirects: FakeReply(content_type))
-    monkeypatch.setattr(module.time, "sleep", lambda s: None)
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, follow_redirects: FakeReply(content_type))
+    monkeypatch.setattr(fal_queue.time, "sleep", lambda s: None)
     return service
 
 

@@ -108,3 +108,17 @@ def test_a_realistic_run_is_refused_before_any_call(container, run):
     with pytest.raises(ValueError, match="is a narration film; use `run <stage>`"):
         lesson(container, claude).run(run.id)
     assert claude.calls == 0
+
+
+def test_a_song_without_lines_or_with_a_deleted_analysis_is_refused_before_any_call(container, run):
+    songs, claude = container.song_repository(), FakeClaude(draft())
+    song = songs.songs.get(run.song_id)
+    analysis = songs.analyses.get(song.analysis_id)
+    analysis.lines = []
+    songs.analyses.update(analysis)
+    with pytest.raises(ValueError, match="has no lyric lines"):
+        lesson(container, claude).run(run.id)
+    songs.analyses.delete(analysis.id)
+    with pytest.raises(LookupError, match="has not been analysed"):
+        lesson(container, claude).run(run.id)
+    assert claude.calls == 0

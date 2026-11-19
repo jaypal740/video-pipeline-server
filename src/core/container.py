@@ -74,7 +74,9 @@ class Container(containers.DeclarativeContainer):
 
     # model providers
     openai_service = providers.Singleton(OpenAiService, api_key=settings.provided.openai_api_key)
-    anthropic_service = providers.Singleton(AnthropicService, api_key=settings.provided.claude_api_key)
+    anthropic_service = providers.Singleton(AnthropicService, api_key=settings.provided.claude_api_key,
+                                            timeout_s=settings.provided.llm_timeout_s,
+                                            max_retries=settings.provided.llm_max_retries)
     llm_service = providers.Singleton(LlmService, openai=openai_service, anthropic=anthropic_service)
     fal_image_service = providers.Singleton(FalImageService, api_key=settings.provided.fal_key,
                                             fallback_model=settings.provided.image_fallback_model)

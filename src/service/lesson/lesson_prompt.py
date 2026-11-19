@@ -83,6 +83,19 @@ SYSTEM = _system(_PEOPLE_ONLY, "a person (the narrator or a presenter)")
 JAMWISE_SYSTEM = _system(_PLAN_CHARACTERS, "the song's own singer", _KEYWORD)
 
 
+def package_facts(package: dict, brief: dict) -> list[str]:
+    """The plan's facts, wrong ideas to avoid, terms and ways to show each concept, as prompt lines."""
+    return [f"- Fact: {f.get('kidVersion') or f.get('fact')} {f.get('explanation') or ''}".rstrip()
+            for f in package.get("keyFacts") or []] + \
+           [f"- Wrong idea to avoid: {f.get('misconception')}" for f in package.get("keyFacts") or []
+            if f.get("misconception")] + \
+           [f"- Term {c.get('term')}: {c.get('kidDefinition')}"
+            + (f" Not to be confused with: {'; '.join(c['nonExamples'])}" if c.get("nonExamples") else "")
+            for c in package.get("vocabularyCards") or [] if c.get("term")] + \
+           [f"- How to show {m.get('concept')}: {m.get('visualDemonstration')}"
+            for m in brief.get("teachingMoments") or [] if m.get("concept")]
+
+
 def jamwise_direction(export: dict) -> str:
     """JamWise's plan for the song, which the lesson follows: its scenes become the sequences, with its goals,
     characters, facts, vocabulary and how it meant to demonstrate each concept."""
@@ -114,29 +127,21 @@ def jamwise_direction(export: dict) -> str:
              "numbers. Leave out anything a character says that the song does not sing. Show an animal or thing "
              "once in a picture, never two of it side by side. What each of the plan's characters stands for is "
              "listed below; where a rule says host, narrator or presenter, that is the song's own singer."]
-    parts += [f"- Learning goal: {g}" for g in package.get("learningObjectives", [])]
-    parts += [f"- In the plan, {c.get('name')} stands for: {c.get('concept')}" for c in brief.get("cast", [])
+    parts += [f"- Learning goal: {g}" for g in package.get("learningObjectives") or []]
+    parts += [f"- In the plan, {c.get('name')} stands for: {c.get('concept')}" for c in brief.get("cast") or []
               if c.get("name")]
     parts += [f"- Scene {s.get('id')}: {s.get('title')}. Place: {s.get('place')}. Happens: {s.get('situation')} "
               f"Seen: {s.get('visualDescription')} Shows the idea: "
               f"{(s.get('teachingMoment') or {}).get('visualDemonstration')} Teaches: {s.get('teaches')}"
-              for s in brief.get("scenes", [])]
+              for s in brief.get("scenes") or []]
     parts += [f"- Section {s.get('section')}: {s.get('narrativeGoal')} Teaches: {s.get('educationalFocus')}"
-              for s in brief.get("sectionPlans", [])]
+              for s in brief.get("sectionPlans") or []]
     if world.get("chorusVisual"):
         parts.append(f"- Chorus picture: {world['chorusVisual']}")
     if brief.get("loopVisual"):
         parts.append(f"- Ending picture: {brief['loopVisual']}")
-    parts += [f"- Number: {a.get('statistic')} Shown as: {a.get('visual')}" for a in brief.get("numberAnchors", [])]
-    parts += [f"- Fact: {f.get('kidVersion') or f.get('fact')} {f.get('explanation') or ''}".rstrip()
-              for f in package.get("keyFacts", [])]
-    parts += [f"- Wrong idea to avoid: {f.get('misconception')}" for f in package.get("keyFacts", [])
-              if f.get("misconception")]
-    parts += [f"- Term {c.get('term')}: {c.get('kidDefinition')}"
-              + (f" Not to be confused with: {'; '.join(c['nonExamples'])}" if c.get("nonExamples") else "")
-              for c in package.get("vocabularyCards", []) if c.get("term")]
-    parts += [f"- How to show {m.get('concept')}: {m.get('visualDemonstration')}"
-              for m in brief.get("teachingMoments", []) if m.get("concept")]
+    parts += [f"- Number: {a.get('statistic')} Shown as: {a.get('visual')}" for a in brief.get("numberAnchors") or []]
+    parts += package_facts(package, brief)
     wow = package.get("wowFact") or {}
     if wow.get("fact"):
         parts.append(f"- Wow fact: {wow['fact']}")
@@ -147,17 +152,17 @@ def jamwise_direction(export: dict) -> str:
 
 
 def featured_terms(export: dict) -> list[str]:
-    return [t["word"] for t in (export.get("creativeBrief") or {}).get("featuredTerms", []) if t.get("word")]
+    return [t["word"] for t in (export.get("creativeBrief") or {}).get("featuredTerms") or [] if t.get("word")]
 
 
 def scene_ids(export: dict) -> list[int]:
-    return [s["id"] for s in (export.get("creativeBrief") or {}).get("scenes", []) if "id" in s]
+    return [s["id"] for s in (export.get("creativeBrief") or {}).get("scenes") or [] if "id" in s]
 
 
 def sequence_limit(export: dict) -> int:
     """How many sequences a JamWise song may have: one per scene of its plan and one per chorus."""
-    scenes = (export.get("creativeBrief") or {}).get("scenes", [])
-    choruses = [s for s in export.get("sections", []) if s.get("type") == "chorus"]
+    scenes = (export.get("creativeBrief") or {}).get("scenes") or []
+    choruses = [s for s in export.get("sections") or [] if s.get("type") == "chorus"]
     return max(MAX_SEQUENCES, len(scenes) + len(choruses))
 
 

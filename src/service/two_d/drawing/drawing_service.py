@@ -12,7 +12,6 @@ from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.image.image_check_schema import Brief
 from src.schema.two_d.beat_schema import BeatLessonPlan
-from src.schema.run.stage_state_schema import StageState
 from src.schema.two_d.script_schema import AnimationScript, Drawing, DrawingKind
 from src.service.two_d.drawing.cutout import cut_out
 from src.service.two_d.drawing.drawing_prompt import (TRUE, aspect_of, drawing_brief, drawing_prompt, must_not_show,
@@ -20,7 +19,7 @@ from src.service.two_d.drawing.drawing_prompt import (TRUE, aspect_of, drawing_b
 from src.service.image.fal_image_service import FalImageService, ImageReply, RESOLUTION
 from src.service.image.image_check_service import ImageCheckService
 from src.service.llm.llm_service import LabelledImage, LlmCall, LlmService
-from src.service.stage.stage_common import add_cost, add_llm_cost, asset_url, fail_stage, write_correction
+from src.service.stage.stage_common import add_cost, add_llm_cost, asset_url, fail_stage, start_stage, write_correction
 from src.service.two_d.common import script_of
 from src.service.storage.storage_service import Storage
 
@@ -68,10 +67,7 @@ class DrawingService:
         if state is not None and not force and state.status == StageStatus.DONE and state.input_hash == key:
             logger.info("drawings %s: reused, inputs unchanged", run_id[:8])
             return {name: self._assets.assets.get(a) for name, a in state.output["drawings"].items()}
-        state = state or self._runs.stage_states.add(StageState(run_id=run_id, stage=STAGE))
-        state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
-        state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
-        state = self._runs.stage_states.update(state)
+        state = start_stage(self._runs, state, run_id, STAGE, key)
         logger.info("drawings %s: %s, %d of %d drawings to draw", run_id[:8], model, len(todo), len(board.drawings))
         made: dict[str, Asset] = {}
         try:
@@ -124,25 +120,39 @@ class DrawingService:
                     cost_usd=0.0, review=ReviewState.PASSED))
             else:
                 jobs.append((d, prompt, aspect, ref, base, keys))
-        attempt = lambda job: self._tries(
-            model, drawing_brief(board, job[0], must_not_show(board, job[0], avoid), taught_with(board, job[0], taught)), *job)
+        def attempt(job):                                       # a worker that fails keeps the tries it paid for
+            tries = []
+            try:
+                self._tries(model, drawing_brief(board, job[0], must_not_show(board, job[0], avoid),
+                                                 taught_with(board, job[0], taught)), *job, tries)
+            except Exception as exc:
+                return tries, exc
+            return tries, None
         with ThreadPoolExecutor(max_workers=self._settings.image_workers) as pool:
             drawn = list(pool.map(attempt, jobs))
-        for (d, _, aspect, ref, _, _), tries in zip(jobs, drawn):
-            out[d.id] = self._keep(run_id, d, aspect, ref, tries)
+        failure = None
+        for (d, _, aspect, ref, _, _), (tries, error) in zip(jobs, drawn):
+            if error is None:
+                out[d.id] = self._keep(run_id, d, aspect, ref, tries)
+            else:                                               # stored and costed, none chosen: a re-run tries again
+                self._store(run_id, d, aspect, ref, tries)
+                failure = failure or error
+        if failure:
+            raise failure
         return [out[d.id] for d in level]
 
     def _tries(self, model: str, brief: Brief, drawing: Drawing, prompt: str, aspect: str,
-               ref: list[Asset], base: int, keys: list[str]) -> list["Try"]:
+               ref: list[Asset], base: int, keys: list[str], tries: list["Try"]) -> list["Try"]:
         """Draw, cut out and check, again on a new seed until a try passes; a retry's prompt is given a
         correction written from what the last try's checks found. Runs beside other drawings, so it only
-        calls the models; nothing is stored here."""
+        calls the models; nothing is stored here. Each try is added to `tries` as it is made, so the caller
+        has them even when a later one raises."""
         ref_urls = [asset_url(self._storage, self._images.upload, r) for r in ref]
         about = (lambda r: f"reference: the drawing {r.target_id}") if drawing.of else (
             lambda r: f"the drawing {r.target_id}: the same character, shown so you can tell whether the picture to "
                       "check kept anything of it that its own description does not ask for")
         labelled = [LabelledImage(label=about(r), data=self._storage.get(r.path)) for r in ref]
-        tries, correction, fix = [], None, None
+        correction, fix = None, None
         for n, key in enumerate(keys):
             drawn = f"{prompt} {correction}" if correction else prompt
             reply = self._images.generate(model, drawn, ref_urls, aspect, seed=base + n,
@@ -165,10 +175,8 @@ class DrawingService:
                     brief.model_copy(update={"moment": brief.description}), made.problems)
         return tries
 
-    def _keep(self, run_id: str, drawing: Drawing, aspect: str, ref: list[Asset], tries: list["Try"]) -> Asset:
-        """Store every try under its own file, with its cut-out beside it, and say which one the video uses:
-        the try that passed; else the best-scoring one, the later on a tie, when it scored the pass mark and
-        is true to the real thing (used_best); else none, and the drawing has failed."""
+    def _store(self, run_id: str, drawing: Drawing, aspect: str, ref: list[Asset], tries: list["Try"]) -> list[Asset]:
+        """Store every try under its own file, with its cut-out beside it, and its costs."""
         assets = []
         for t in tries:
             asset_id = new_id()
@@ -192,6 +200,13 @@ class DrawingService:
                          t.check.input_tokens + t.check.output_tokens, "tokens")
             if t.fix:
                 add_llm_cost(self._assets, run_id, STAGE, t.fix)
+        return assets
+
+    def _keep(self, run_id: str, drawing: Drawing, aspect: str, ref: list[Asset], tries: list["Try"]) -> Asset:
+        """Store every try, and say which one the video uses: the try that passed; else the best-scoring
+        one, the later on a tie, when it scored the pass mark and is true to the real thing (used_best);
+        else none, and the drawing has failed."""
+        assets = self._store(run_id, drawing, aspect, ref, tries)
         if assets[-1].review == ReviewState.PASSED:
             logger.info("drawing %s: passed on try %d", drawing.id, len(assets))
             return assets[-1]

@@ -8,6 +8,7 @@ from src.schema.asset.asset_schema import ReviewState
 from src.schema.enums import StageName, StageStatus
 from src.schema.storyboard.storyboard_schema import Storyboard
 from src.service.storage.storage_service import LocalStorage
+from src.service.video import video_service
 from src.service.video.clip_checks import ClipChecks
 from src.service.video.fal_video_service import VideoReply
 from tests.test_keyframe_service import ready_run
@@ -176,6 +177,20 @@ def test_sung_shots_are_left_to_lip_sync_and_the_cap_stops_a_run_before_drawing(
     container.settings().spend_cap_usd, container.settings().video_sung_mode = 25.0, "skip"
     with pytest.raises(ValueError, match="no finished keyframes"):
         service.run(ready_run(container, sheets).id)
+
+
+def test_recheck_judges_a_real_footage_clip_with_no_subjects_as_the_run_does(stage, container, monkeypatch):
+    service, sheets, video, checks, vision = stage
+    run = drawn_run(container, sheets)
+    vision.fail_when, vision.fail_score = ("frames of one short clip", 100), 5
+    service.run(run.id)                                          # kept below the pass mark: recheck has work
+    seen = []
+    real_brief = video_service.clip_brief
+    monkeypatch.setattr(video_service, "real_shots", lambda cast, shots: {"s01"})
+    monkeypatch.setattr(video_service, "clip_brief",
+                        lambda shot, place, subjects: seen.append((shot.id, subjects)) or real_brief(shot, place, subjects))
+    service.recheck(run.id)
+    assert ("s01", []) in seen and all(subjects for shot_id, subjects in seen if shot_id != "s01")
 
 
 def test_a_shot_where_only_the_camera_moves_is_an_ffmpeg_move_over_its_keyframe(stage, container):

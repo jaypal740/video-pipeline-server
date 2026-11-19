@@ -8,16 +8,13 @@ from src.repository.song.song_repository import SongRepository
 from src.schema.base_schema import utcnow
 from src.schema.enums import FilmType, StageName, StageStatus
 from src.schema.lesson.lesson_schema import GradeBand, LessonDraft, LessonPlan, LineTag, VideoType
-from src.schema.run.run_schema import Run
-from src.schema.run.stage_state_schema import StageState
-from src.schema.song.song_analysis_schema import LyricLine
-from src.service.intake.intake_jamwise import export_beside
 from src.service.lesson.lesson_prompt import (JAMWISE_SYSTEM, PROMPT_VERSION, SYSTEM, featured_terms,
                                               jamwise_direction, scene_ids, sequence_limit, user_prompt)
 from src.service.lesson.lesson_rules import (MAX_SEQUENCES, allowed_types, chorus_lines, clear_keywords, problems,
                                              scene_notes, sing_the_chorus)
-from src.service.llm.llm_service import LlmError, LlmService
-from src.service.stage.stage_common import REALISTIC, add_llm_cost, fail_stage, film_type_of, require_film_type
+from src.service.llm.llm_service import LlmService
+from src.service.stage.stage_common import (REALISTIC, analysis_of, export_of, film_type_of, parse_stage, require_film_type,
+                                            run_of, start_stage)
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +34,14 @@ class LessonService:
 
     def run(self, run_id: str, model: str | None = None, video_type: VideoType | None = None,
             film_type: FilmType | None = None, force: bool = False) -> LessonPlan:
-        run = self._run(run_id)
+        run = run_of(self._runs, run_id)
         require_film_type(self._runs, run.id, REALISTIC)
         if run.audience is None:
             raise ValueError(f"Run {run.id} has no grade band; create it with --grade")
         band = GradeBand(run.audience)
         types = allowed_types(band, video_type)
-        lines = self._lines(run)
-        export = self._jamwise(run)
+        lines = analysis_of(self._songs, run).lines
+        export = export_of(self._songs, run)
         film_type = (film_type or film_type_of(self._runs, run.id)
                      or (FilmType.MUSIC_VIDEO if export else FilmType.NARRATION))
         if film_type not in REALISTIC:
@@ -71,21 +68,10 @@ class LessonService:
             return plan
         logger.info("lesson %s: %s, %s, grades %s, %d lines, types %s", run.id[:8], film_type, model, band, len(lines),
                     [str(t) for t in types])
-        state = state or self._runs.stage_states.add(StageState(run_id=run.id, stage=StageName.LESSON))
-        state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
-        state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
-        state = self._runs.stage_states.update(state)
-        try:
-            draft, call = self._llm.parse(model, system, prompt, LessonDraft,
-                                          check=lambda d: problems(d, lines, band, types, featured, most, bool(chorus)))
-        except LlmError as exc:
-            add_llm_cost(self._assets, run.id, StageName.LESSON, exc.call)
-            fail_stage(self._runs, state, exc, logger, "lesson")
-            raise
-        except Exception as exc:
-            fail_stage(self._runs, state, exc, logger, "lesson")
-            raise
-        add_llm_cost(self._assets, run.id, StageName.LESSON, call)
+        state = start_stage(self._runs, state, run.id, StageName.LESSON, key)
+        draft, call = parse_stage(self._llm, self._assets, self._runs, state, run.id, StageName.LESSON, "lesson",
+                                  logger, model, system, prompt, LessonDraft,
+                                  lambda d: problems(d, lines, band, types, featured, most, bool(chorus)))
         if chorus:
             sing_the_chorus(draft, chorus)
         unclear = {l.index for l in lines if l.unclear}
@@ -102,19 +88,3 @@ class LessonService:
                     plan.video_type, len(plan.lines), call.cost_usd, call.attempts,
                     (state.finished_at - state.started_at).total_seconds())
         return plan
-
-    def _run(self, run_id: str) -> Run:
-        run = self._runs.runs.get(run_id)
-        if run is None:
-            raise LookupError(f"Run {run_id} not found")
-        return run
-
-    def _lines(self, run: Run) -> list[LyricLine]:
-        song = self._songs.songs.get(run.song_id)
-        if song is None or song.analysis_id is None:
-            raise LookupError(f"Run {run.id}'s song has not been analysed; run intake on it first")
-        return self._songs.analyses.get(song.analysis_id).lines
-
-    def _jamwise(self, run: Run) -> dict | None:
-        """The song's JamWise export, if it came from JamWise."""
-        return export_beside(self._songs.songs.get(run.song_id).audio_path)

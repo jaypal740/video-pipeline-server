@@ -12,7 +12,6 @@ from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.image.image_check_schema import Brief
 from src.schema.two_d.beat_schema import BeatLessonPlan
-from src.schema.run.stage_state_schema import StageState
 from src.schema.two_d.script_schema import AnimationScript, Drawing
 from src.service.two_d.drawing.drawing_prompt import must_not_show
 from src.service.image.image_check_service import ImageCheckService
@@ -20,7 +19,7 @@ from src.service.llm.llm_service import LabelledImage, LlmCall, LlmService
 from src.service.two_d.loop.loop_checks import LoopCheck, LoopCutService
 from src.service.two_d.loop.loop_prompt import LOOP_SECONDS, loop_brief, loop_prompt
 from src.service.two_d.render.film_check_service import film_key
-from src.service.stage.stage_common import add_cost, add_llm_cost, asset_url, fail_stage, write_correction
+from src.service.stage.stage_common import add_cost, add_llm_cost, asset_url, fail_stage, start_stage, write_correction
 from src.service.two_d.common import script_of
 from src.service.storage.storage_service import Storage
 from src.service.video.fal_video_service import FalVideoService, VideoReply
@@ -73,13 +72,11 @@ class LoopService:
             logger.info("loops %s: reused, inputs unchanged", run_id[:8])
             return {name: self._assets.assets.get(a) for name, a in state.output["loops"].items()}
         check, drawn = self._runs.stage(run_id, StageName.QC), self._runs.stage(run_id, StageName.VISUAL_IDENTITY)
-        if check is None or check.status != StageStatus.DONE or check.input_hash != film_key(board, drawn.output["drawings"]):
+        if drawn is None or check is None or check.status != StageStatus.DONE \
+                or check.input_hash != film_key(board, drawn.output["drawings"]):
             raise ValueError(f"Run {run_id}'s film has not passed its check with this script and these drawings; run the "
                              "check stage first" + (f". It found: {check.error}" if check and check.error else ""))
-        state = state or self._runs.stage_states.add(StageState(run_id=run_id, stage=STAGE))
-        state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
-        state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
-        state = self._runs.stage_states.update(state)
+        state = start_stage(self._runs, state, run_id, STAGE, key)
         logger.info("loops %s: %s, %d of %d drawings to animate", run_id[:8], model, len(todo), len(board.drawings))
         try:
             made = self._animate_all(run_id, model, board, todo, stills, avoid)
@@ -129,21 +126,35 @@ class LoopService:
                     cost_usd=0.0, review=cached.review))
             else:
                 jobs.append((d, prompt, still, base, keys))
-        attempt = lambda job: self._tries(model, loop_brief(board, job[0], must_not_show(board, job[0], avoid)), *job)
+        def attempt(job):                                       # a worker that fails keeps the tries it paid for
+            tries = []
+            try:
+                self._tries(model, loop_brief(board, job[0], must_not_show(board, job[0], avoid)), *job, tries)
+            except Exception as exc:
+                return tries, exc
+            return tries, None
         with ThreadPoolExecutor(max_workers=self._settings.video_workers) as pool:
             animated = list(pool.map(attempt, jobs))
-        for (d, _, still, _, _), tries in zip(jobs, animated):
-            out[d.id] = self._keep(run_id, d, still, tries)
+        failure = None
+        for (d, _, still, _, _), (tries, error) in zip(jobs, animated):
+            if error is None:
+                out[d.id] = self._keep(run_id, d, still, tries)
+            else:                                               # stored and costed, none chosen: a re-run tries again
+                self._store(run_id, d, still, tries)
+                failure = failure or error
+        if failure:
+            raise failure
         return {d.id: out[d.id] for d in todo}
 
     def _tries(self, model: str, brief: Brief, drawing: Drawing, prompt: str, still: Asset, base: int,
-               keys: list[str]) -> list["Try"]:
+               keys: list[str], tries: list["Try"]) -> list["Try"]:
         """Animate, cut out and check, again on a new seed until a try passes; a retry's prompt is given a
         correction written from what the last try's checks found. Runs beside other loops, so it only calls
-        the models and reads frames; nothing is stored here."""
+        the models and reads frames; nothing is stored here. Each try is added to `tries` as it is made, so
+        the caller has them even when a later one raises."""
         url = asset_url(self._storage, self._video.upload, still)
         reference = [LabelledImage(label=f"reference: the drawing {drawing.id}", data=self._storage.get(still.path))]
-        tries, correction, fix = [], None, None
+        correction, fix = None, None
         for n, key in enumerate(keys):
             asked = f"{prompt} {correction}" if correction else prompt
             reply = self._video.generate(model, asked, url, LOOP_SECONDS, seed=base + n, end_image_url=url)
@@ -167,11 +178,8 @@ class LoopService:
                     brief.model_copy(update={"moment": brief.description}), made.problems)
         return tries
 
-    def _keep(self, run_id: str, drawing: Drawing, still: Asset, tries: list["Try"]) -> Asset:
-        """Store every try under its own file, with its transparent version beside it, and say which one the
-        video uses: the try that passed; else the better one (one that breaks no hard rule, then one that
-        closes and moves, then the higher score, then the later try), as used_best when it breaks no hard
-        rule; else none, and the drawing holds still."""
+    def _store(self, run_id: str, drawing: Drawing, still: Asset, tries: list["Try"]) -> list[Asset]:
+        """Store every try under its own file, with its transparent version beside it, and its costs."""
         assets = []
         for t in tries:
             asset_id = new_id()
@@ -193,6 +201,13 @@ class LoopService:
                      t.reply.seconds_requested, "second")
             for call in (c for c in (t.check, t.fix) if c is not None):
                 add_llm_cost(self._assets, run_id, STAGE, call)
+        return assets
+
+    def _keep(self, run_id: str, drawing: Drawing, still: Asset, tries: list["Try"]) -> Asset:
+        """Store every try, and say which one the video uses: the try that passed; else the better one (one
+        that breaks no hard rule, then one that closes and moves, then the higher score, then the later
+        try), as used_best when it breaks no hard rule; else none, and the drawing holds still."""
+        assets = self._store(run_id, drawing, still, tries)
         if assets[-1].review == ReviewState.PASSED:
             logger.info("loop %s: passed on try %d", drawing.id, len(assets))
             return assets[-1]

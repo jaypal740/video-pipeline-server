@@ -307,6 +307,26 @@ def test_a_render_needs_the_drawings_and_loops_its_beats_show(container, stage):
         service.run("missing")
 
 
+def test_a_loop_is_read_at_the_films_frame_rate_whatever_its_own(container, stage, tmp_path):
+    service, _, _ = stage
+    raw, clip, folder = tmp_path / "slow.rgba", tmp_path / "slow.webm", tmp_path / "read"
+    folder.mkdir()
+    raw.write_bytes(np.concatenate([frames([20, 26, 32, 38]), np.full((4, 64, 64, 1), 255, np.uint8)], axis=3).tobytes())
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", "64x64", "-r", "3", "-i", str(raw),
+                    "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", str(clip)], check=True)
+    container.storage().put("l/slow.webm", clip.read_bytes(), "video/webm")
+    slow = Asset(run_id="r", stage=StageName.LOOPS, kind=AssetKind.VIDEO, path="l/slow.mp4", sha256="s",
+                 params={"cut": "l/slow.webm", "fps": 3.0})
+    assert len(service._frames(folder, "slow", slow)) == 8       # 4 frames at 3 fps are 1.33 s: 8 frames at the film's 6
+
+
+def test_a_render_that_starts_after_no_beat_is_refused_before_the_stage_is_touched(container, stage):
+    service, run, _ = stage
+    with pytest.raises(ValueError, match="--until is before the first beat"):
+        service.run(run.id, until=0)
+    assert container.run_repository().stage(run.id, StageName.RENDER) is None
+
+
 class FakeJudge:
     """The film judge: answers each check with the next list of problems it was given."""
 
@@ -399,3 +419,12 @@ def test_a_repair_that_leaves_more_problems_is_undone_and_after_three_the_film_g
     assert state.output["repairs"] == 3 and len(state.output["problems"]) == 1               # what is left is on record
     assert service.run(run.id) == found and len(judge.seen) == 4                             # and is not judged again
     assert service.run(run.id, force=True) == [] and len(scripts.repaired) == 3              # a clean film needs no repair
+
+
+def test_a_repair_that_fails_in_any_way_leaves_the_old_script_restored_and_the_error_raised(container, check):
+    service, judge, scripts, run = check
+    judge.found = [[FACE]]
+    scripts.repair = lambda run_id, gaps: (_ for _ in ()).throw(KeyError("not a model error"))
+    with pytest.raises(KeyError, match="not a model error"):
+        service.run(run.id)
+    assert scripts.restored == [SCRIPT] and scripts.drawn == 1

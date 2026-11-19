@@ -1,19 +1,27 @@
 import logging
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from typing import TypeVar
 
 from src.repository.asset.asset_repository import AssetRepository
 from src.repository.run.run_repository import RunRepository
+from src.repository.song.song_repository import SongRepository
 from src.schema.asset.asset_schema import Asset, ReviewState
 from src.schema.asset.cost_entry_schema import CostEntry
 from src.schema.base_schema import utcnow
 from src.schema.enums import FilmType, StageName, StageStatus
 from src.schema.image.image_check_schema import Brief, Correction
+from src.schema.run.run_schema import Run
 from src.schema.run.stage_state_schema import StageState
+from src.schema.song.song_analysis_schema import SongAnalysis
 from src.schema.storyboard.storyboard_schema import Storyboard
+from src.service.intake.intake_jamwise import export_beside
 from src.service.keyframe.keyframe_prompt import CORRECTION, check_correction, correction_request
 from src.service.llm.llm_service import LlmCall, LlmError, LlmService
 from src.service.storage.storage_service import Storage
+
+T = TypeVar("T")
 
 # Steps the stages share. Each takes the calling stage's logger, so log lines name the stage as before.
 
@@ -46,6 +54,34 @@ def require_film_type(runs: RunRepository, run_id: str, allowed: frozenset[FilmT
         return
     hint = "run 2d <stage>" if found == FilmType.TWO_D else "run <stage>"
     raise ValueError(f"run {run_id[:8]} is a {found or 'realistic'} film; use `{hint}`")
+
+
+def run_of(runs: RunRepository, run_id: str) -> Run:
+    run = runs.runs.get(run_id)
+    if run is None:
+        raise LookupError(f"Run {run_id} not found")
+    return run
+
+
+def analysis_of(songs: SongRepository, run: Run) -> SongAnalysis:
+    song = songs.songs.get(run.song_id)
+    analysis = songs.analyses.get(song.analysis_id) if song is not None and song.analysis_id is not None else None
+    if analysis is None:
+        raise LookupError(f"Run {run.id}'s song has not been analysed; run intake on it first")
+    return analysis
+
+
+def export_of(songs: SongRepository, run: Run) -> dict | None:
+    """The song's JamWise export, if it came from JamWise."""
+    return export_beside(songs.songs.get(run.song_id).audio_path)
+
+
+def start_stage(runs: RunRepository, state: StageState | None, run_id: str, stage: StageName, key: str) -> StageState:
+    """Marks the stage running for the inputs `key`: a first run adds its row, a re-run counts another attempt."""
+    state = state or runs.stage_states.add(StageState(run_id=run_id, stage=stage))
+    state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
+    state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
+    return runs.stage_states.update(state)
 
 
 def storyboard_of(runs: RunRepository, run_id: str) -> Storyboard:
@@ -87,6 +123,24 @@ def fail_stage(runs: RunRepository, state: StageState, exc: Exception, log: logg
     state.status, state.error, state.finished_at = StageStatus.FAILED, str(exc) or type(exc).__name__, utcnow()
     runs.stage_states.update(state)
     log.error("%s %s: failed: %s", what, state.run_id[:8], state.error)
+
+
+def parse_stage(llm: LlmService, assets: AssetRepository, runs: RunRepository, state: StageState, run_id: str,
+                stage: StageName, what: str, log: logging.Logger, model: str, system: str, prompt: str,
+                output_type: type[T], check: Callable[[T], list[str]]) -> tuple[T, LlmCall]:
+    """One model call for a stage, re-asked until `check` passes: its cost is recorded, and a failure
+    marks the stage failed before it is raised again."""
+    try:
+        draft, call = llm.parse(model, system, prompt, output_type, check=check)
+    except LlmError as exc:
+        add_llm_cost(assets, run_id, stage, exc.call)
+        fail_stage(runs, state, exc, log, what)
+        raise
+    except Exception as exc:
+        fail_stage(runs, state, exc, log, what)
+        raise
+    add_llm_cost(assets, run_id, stage, call)
+    return draft, call
 
 
 def keep_best(assets: AssetRepository, floor: float, log: logging.Logger, what: str, shot_id: str,

@@ -1,7 +1,7 @@
 import pytest
 from pydantic import BaseModel
 
-from src.service.llm.llm_service import LlmError, LlmRefusal, LlmService, ProviderReply
+from src.service.llm.llm_service import LlmCall, LlmError, LlmRefusal, LlmService, LlmTruncated, ProviderReply
 
 
 class Answer(BaseModel):
@@ -53,6 +53,35 @@ def test_a_refusal_is_not_retried():
     with pytest.raises(LlmError, match="refused"):
         llm.parse("claude-opus-5-5", "s", "u", Answer)
     assert len(llm._anthropic.prompts) == 1
+
+
+def unusable(cost=0.02):
+    return LlmError("cut off", LlmCall(provider="anthropic", model="claude-opus-5-5", attempts=1, input_tokens=50,
+                                       output_tokens=900, cost_usd=cost), problems=["the answer was cut off"])
+
+
+def test_an_unusable_answer_is_asked_again_and_its_cost_is_kept():
+    llm = service(claude_values=[unusable(), 2])
+    output, call = llm.parse("claude-opus-5-5", "s", "u", Answer)
+    assert output.value == 2 and call.attempts == 2
+    assert call.cost_usd == pytest.approx(0.03) and call.input_tokens == 150 and call.output_tokens == 910
+
+
+def test_unusable_answers_to_the_last_attempt_still_surface_with_their_cost():
+    llm = service(claude_values=[unusable(), unusable(), unusable()])
+    with pytest.raises(LlmError, match="no valid answer in 3 attempts: the answer was cut off") as err:
+        llm.parse("claude-opus-5-5", "s", "u", Answer, max_attempts=3)
+    assert err.value.call.attempts == 3 and err.value.call.cost_usd == pytest.approx(0.06)
+    assert err.value.output is None
+
+
+def test_a_cut_off_answer_is_not_retried_and_its_cost_is_kept():
+    cut = LlmTruncated("cut off", unusable().call, problems=["the answer was cut off"])
+    llm = service(claude_values=[cut, 2])
+    with pytest.raises(LlmError, match="cut off") as err:
+        llm.parse("claude-opus-5-5", "s", "u", Answer)
+    assert len(llm._anthropic.prompts) == 1
+    assert err.value.call.attempts == 1 and err.value.call.cost_usd == pytest.approx(0.02)
 
 
 def test_an_unpriced_model_is_refused_before_any_call():

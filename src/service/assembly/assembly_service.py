@@ -15,12 +15,11 @@ from src.schema.asset.asset_schema import Asset, ReviewState
 from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.lesson.lesson_schema import LessonPlan
-from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_analysis_schema import TimedWord
 from src.schema.storyboard.storyboard_schema import Position, Shot, ShotKind, Storyboard, Transition
 from src.service.assembly.captions import KEYWORD_SECONDS, Pop, Screen, caption_track, sung_at
 from src.service.local.ffmpeg_service import FfmpegService
-from src.service.stage.stage_common import storyboard_of
+from src.service.stage.stage_common import start_stage, storyboard_of
 from src.service.storage.storage_service import Storage
 from src.service.storyboard.storyboard_rules import real_shots
 
@@ -81,10 +80,7 @@ class AssemblyService:
         if state is not None and not force and state.status == StageStatus.DONE and state.input_hash == key:
             logger.info("assembly %s: reused, inputs unchanged", run_id[:8])
             return self._assets.assets.get(state.output["film"])
-        state = state or self._runs.stage_states.add(StageState(run_id=run_id, stage=StageName.ASSEMBLY))
-        state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
-        state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
-        state = self._runs.stage_states.update(state)
+        state = start_stage(self._runs, state, run_id, StageName.ASSEMBLY, key)
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 work, rows = Path(tmp), []
@@ -134,6 +130,8 @@ class AssemblyService:
         last frame. Returns the playback speed (1.0 when not retimed)."""
         s = self._settings
         fps, w, h = s.assembly_fps, s.assembly_width, s.assembly_height
+        if fps <= 0 or frames <= 0:
+            raise ValueError(f"cannot fit a clip to {frames} frames at {fps} fps; both must be above zero")
         stretch, trim = 1.0, ""
         if retime:
             source = (self._ffmpeg.packets(raw).get("video", 0) - 1) / self._ffmpeg.probe(raw)["fps"]

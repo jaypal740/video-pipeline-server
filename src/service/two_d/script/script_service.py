@@ -9,13 +9,12 @@ from src.schema.base_schema import utcnow
 from src.schema.enums import StageName, StageStatus
 from src.schema.two_d.beat_schema import BeatLessonPlan
 from src.schema.run.run_schema import Run
-from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_analysis_schema import SongAnalysis
 from src.schema.two_d.script_schema import (AnimationScript, BeatScript, BeatScriptDraft, DrawingList, Screen,
                                             ScriptPatch, ScriptRepair, ScriptReview)
-from src.service.intake.intake_jamwise import export_beside
 from src.service.llm.llm_service import LlmError, LlmService
-from src.service.stage.stage_common import add_llm_cost, fail_stage, require_film_type
+from src.service.stage.stage_common import (add_llm_cost, analysis_of, export_of, fail_stage, require_film_type, run_of,
+                                            start_stage)
 from src.service.two_d.common import TWO_D
 from src.service.two_d.script.script_prompt import (PROMPT_VERSION, SYSTEM, drawings_prompt, jamwise_performer,
                                                     jamwise_pictures, repair_prompt, review_prompt, script_prompt,
@@ -55,10 +54,10 @@ class ScriptService:
         self._settings = settings
 
     def run(self, run_id: str, model: str | None = None, force: bool = False) -> AnimationScript:
-        run = self._run(run_id)
+        run = run_of(self._runs, run_id)
         require_film_type(self._runs, run.id, TWO_D)
         plan = self._plan(run)
-        analysis = self._analysis(run)
+        analysis = analysis_of(self._songs, run)
         if [i for b in plan.beats for i in b.lines] != [l.index for l in analysis.lines]:
             raise ValueError(f"Run {run.id}'s lesson plan is older than its song analysis; run the lesson stage again")
         model = model or run.model_pins.get(StageName.STORYBOARD) or self._settings.storyboard_model
@@ -71,10 +70,7 @@ class ScriptService:
             logger.info("storyboard %s: reused, inputs unchanged", run.id[:8])
             return AnimationScript(**state.output)
         logger.info("storyboard %s: %s, grades %s, %d beats", run.id[:8], model, plan.grade_band, len(plan.beats))
-        state = state or self._runs.stage_states.add(StageState(run_id=run.id, stage=StageName.STORYBOARD))
-        state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
-        state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
-        state = self._runs.stage_states.update(state)
+        state = start_stage(self._runs, state, run.id, StageName.STORYBOARD, key)
         spent, reasks, listed, scripts, screens, kept = 0.0, 0, None, [], [], None
         terms = [t.term for t in plan.key_terms]
         wide = self._settings.assembly_width / self._settings.assembly_height
@@ -154,12 +150,14 @@ class ScriptService:
         """The stored script with the beats `gaps` name written again: what a later check found wrong in the
         film is closed the way the script's own review closes a gap, and checked by code the same way. The
         stage's inputs have not changed, so a re-run of it still reuses the script."""
-        run = self._run(run_id)
-        plan, analysis = self._plan(run), self._analysis(run)
+        run = run_of(self._runs, run_id)
+        plan, analysis = self._plan(run), analysis_of(self._songs, run)
         state = self._runs.stage(run.id, StageName.STORYBOARD)
         if state is None or state.status != StageStatus.DONE:
             raise ValueError(f"Run {run.id} has no animation script; run the storyboard stage first")
         board = AnimationScript(**state.output)
+        if [b.beat for b in board.beats] != [b.id for b in plan.beats]:
+            raise ValueError(f"Run {run.id}'s lesson plan changed; run the storyboard stage again")
         listed = DrawingList(performer=board.performer, palette=board.palette, drawings=board.drawings)
         scripts = [BeatScriptDraft(beat=b.beat, background=b.background,
                                    actions=[a for a in b.actions if a.verb not in BY_CODE]) for b in board.beats]
@@ -197,7 +195,7 @@ class ScriptService:
         return cover_problems(new, done, self._settings.assembly_width / self._settings.assembly_height), done
 
     def _song(self, run: Run, plan: BeatLessonPlan, analysis: SongAnalysis) -> str:
-        export = self._jamwise(run)
+        export = export_of(self._songs, run)
         return song_prompt(plan, analysis.lines, jamwise_performer(export) if export else None,
                            jamwise_pictures(export) if export else None)
 
@@ -211,24 +209,8 @@ class ScriptService:
             performer=listed.performer, drawings=[d for d in listed.drawings if d.id in used],
             beats=done, gaps=gaps, model=model, prompt_version=PROMPT_VERSION)
 
-    def _run(self, run_id: str) -> Run:
-        run = self._runs.runs.get(run_id)
-        if run is None:
-            raise LookupError(f"Run {run_id} not found")
-        return run
-
     def _plan(self, run: Run) -> BeatLessonPlan:
         state = self._runs.stage(run.id, StageName.LESSON)
         if state is None or state.status != StageStatus.DONE:
             raise ValueError(f"Run {run.id} has no lesson plan; run the lesson stage first")
         return BeatLessonPlan(**state.output)
-
-    def _analysis(self, run: Run) -> SongAnalysis:
-        song = self._songs.songs.get(run.song_id)
-        if song is None or song.analysis_id is None:
-            raise LookupError(f"Run {run.id}'s song has not been analysed; run intake on it first")
-        return self._songs.analyses.get(song.analysis_id)
-
-    def _jamwise(self, run: Run) -> dict | None:
-        """The song's JamWise export, if it came from JamWise."""
-        return export_beside(self._songs.songs.get(run.song_id).audio_path)

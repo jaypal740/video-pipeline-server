@@ -148,3 +148,16 @@ def test_the_jamwise_plan_gives_the_lesson_its_facts_terms_and_demonstrations():
                  "- How to show the chorus: The layers one by one", "- How the video ends: Back to the first shot",
                  "- Featured terms: corona"):
         assert part in text
+
+
+def test_a_two_d_plan_with_null_lists_is_read_as_empty():
+    export = {"creativeBrief": {"scenes": None, "sectionPlans": None, "numberAnchors": None, "teachingMoments": None},
+              "contentPackage": {"keyFacts": None, "vocabularyCards": None, "learningObjectives": None}}
+    assert "Learning goal" not in jamwise_direction(export)
+
+
+def test_beats_that_run_backwards_or_leave_the_song_are_sent_back():
+    again = "every beat needs first_line <= last_line and lines inside the song"
+    assert check(draft(beat(0, 1), beat(2, 1), beat(2, 3))) == [again]
+    assert check(draft(beat(0, 3), beat(9, 5))) == [again]
+    assert check(draft(beat(0, 9))) == [again]

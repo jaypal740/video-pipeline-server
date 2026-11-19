@@ -257,6 +257,14 @@ def test_a_singer_who_stands_at_the_side_of_her_clip_is_not_cut_off_by_the_films
     assert red.sum() > 550 and not red[:, 0].any()         # all of her 18 x 45 figure, clear of the edge
 
 
+def test_a_clip_is_not_fitted_to_no_frames_or_no_frame_rate(stage, tmp_path, monkeypatch):
+    service = stage[0]
+    for frames, fps in ((0, FPS), (24, 0)):
+        monkeypatch.setattr(service._settings, "assembly_fps", fps)
+        with pytest.raises(ValueError, match="above zero"):
+            service._fit(tmp_path / "raw.mp4", frames, True, tmp_path / "out.mp4")
+
+
 def test_a_2d_run_is_refused(stage, container):
     service, storage, song, tmp_path = stage
     run, _ = assembled_run(container, storage, song, tmp_path)

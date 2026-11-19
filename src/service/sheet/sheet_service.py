@@ -11,7 +11,6 @@ from src.schema.base_schema import new_id, utcnow
 from src.schema.enums import AssetKind, StageName, StageStatus
 from src.schema.image.image_check_schema import Brief
 from src.schema.lesson.lesson_schema import GradeBand
-from src.schema.run.stage_state_schema import StageState
 from src.schema.storyboard.storyboard_schema import CastKind, CastMember, Place
 from src.service.image.fal_image_service import RESOLUTION, FalImageService
 from src.service.image.image_check_service import ImageCheckService
@@ -20,7 +19,7 @@ from src.service.llm.llm_service import LabelledImage, LlmService
 from src.service.sheet.sheet_prompt import (FACE_VIEWS, HOST_VIEWS, PLATE, SINGER_STYLE, Style, aspect_for, plate_brief,
                                             plate_prompt, sheet_brief, sheet_prompt, views_for)
 from src.service.sheet.sheet_layout import compose_sheet
-from src.service.stage.stage_common import add_cost, add_llm_cost, asset_url, storyboard_of, write_correction
+from src.service.stage.stage_common import add_cost, add_llm_cost, asset_url, start_stage, storyboard_of, write_correction
 from src.service.storage.storage_service import Storage
 from src.service.storyboard.storyboard_rules import HOST, host_in, outfit_text, wardrobe_for
 
@@ -226,10 +225,7 @@ class SheetService:
         if state is not None and not force and state.status == StageStatus.DONE and state.input_hash == key:
             logger.info("sheets %s: reused, inputs unchanged", run_id[:8])
             return self._sheets_from(state.output)
-        state = state or self._runs.stage_states.add(StageState(run_id=run_id, stage=StageName.VISUAL_IDENTITY))
-        state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
-        state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
-        state = self._runs.stage_states.update(state)
+        state = start_stage(self._runs, state, run_id, StageName.VISUAL_IDENTITY, key)
         logger.info("sheets %s: %s, grades %s, %d images to draw", run_id[:8], self._settings.sheet_model, band,
                     len(jobs))
         try:

@@ -80,6 +80,7 @@ class FfmpegService:
                 code = process.wait(timeout=self._timeout_s)
             except BaseException:
                 process.kill()
+                process.wait()
                 raise
             if code != 0:
                 log.seek(0)

@@ -230,3 +230,21 @@ def test_a_run_needs_a_lesson_plan_that_matches_its_song(container, run):
     other = runs.runs.add(Run(song_id=run.song_id, name="other", audience=GradeBand.G3_5))
     with pytest.raises(ValueError, match="no lesson plan"):
         container.script_service().run(other.id)
+
+
+def test_a_deleted_analysis_or_a_changed_plan_is_refused_before_any_call(container, run):
+    claude = FakeClaude(drawings(), scripts(), {"gaps": []})
+    service = storyboard(container, claude)
+    service.run(run.id)
+    runs = container.run_repository()
+    state = runs.stage(run.id, StageName.LESSON)
+    state.output["beats"] = state.output["beats"][:2]
+    state.output["beats"][1]["lines"] = [1, 2]
+    runs.stage_states.update(state)
+    with pytest.raises(ValueError, match="lesson plan changed; run the storyboard stage again"):
+        service.repair(run.id, ["b02: gap"])
+    songs = container.song_repository()
+    songs.analyses.delete(songs.songs.get(run.song_id).analysis_id)
+    with pytest.raises(LookupError, match="has not been analysed"):
+        service.repair(run.id, ["b02: gap"])
+    assert claude.replies == []

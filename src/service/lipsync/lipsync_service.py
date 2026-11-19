@@ -23,7 +23,7 @@ from src.service.llm.llm_service import LabelledImage, LlmCall
 from src.service.local.ffmpeg_service import FfmpegService
 from src.service.sheet.sheet_prompt import NO_OVERLAY_TEXT, STAGE
 from src.service.sheet.sheet_service import USABLE
-from src.service.stage.stage_common import add_cost, asset_urls, keep_best, storyboard_of
+from src.service.stage.stage_common import add_cost, asset_urls, keep_best, start_stage, storyboard_of
 from src.service.storage.storage_service import Storage
 from src.service.storyboard.storyboard_rules import real_shots
 from src.service.video.clip_checks import DURATION_SLACK, ClipChecks, ClipCheckService
@@ -154,10 +154,7 @@ class LipsyncService:
         if state is not None and not force and state.status == StageStatus.DONE and state.input_hash == key:
             logger.info("lipsync %s: reused, inputs unchanged", run_id[:8])
             return {s: self._assets.assets.get(a) for s, a in state.output["clips"].items()}
-        state = state or self._runs.stage_states.add(StageState(run_id=run_id, stage=StageName.LIPSYNC))
-        state.status, state.attempts, state.error = StageStatus.RUNNING, state.attempts + 1, None
-        state.input_hash, state.started_at, state.finished_at = key, utcnow(), None
-        state = self._runs.stage_states.update(state)
+        state = start_stage(self._runs, state, run_id, StageName.LIPSYNC, key)
         logger.info("lipsync %s: %s, %d sung clips to draw, %d blocked by keyframes, %d repeats reused", run_id[:8],
                     model, len(plans), len(blocked), len(sung) - len(shots))
         self._errors: dict[str, str] = {}

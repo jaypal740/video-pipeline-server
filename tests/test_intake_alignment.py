@@ -1,3 +1,5 @@
+import pytest
+
 from src.service.intake.intake_alignment import lyric_lines, song_confidence, spoken_tokens, timed_words
 from src.service.intake.intake_jamwise import jamwise_lines
 
@@ -54,3 +56,23 @@ def test_a_jamwise_line_starts_at_its_earliest_word():
 def test_a_short_jamwise_line_is_never_unclear():
     timing = [{"text": "Go", "startTime": 1.0, "endTime": 1.28, "words": [{"word": "Go", "start": 1.0, "end": 1.28}]}]
     assert not jamwise_lines(timing, ["Go"], 5.0)[1][0].unclear
+
+
+def _line(text, start, end, words=None):
+    return {"text": text, "startTime": start, "endTime": end,
+            "words": [{"word": text, "start": start, "end": end}] if words is None else words}
+
+
+@pytest.mark.parametrize("bad, message", [
+    (lambda t: t[0].pop("startTime"), "line 0 .*startTime"),
+    (lambda t: t[1].update(endTime=None), "line 1 .*endTime"),
+    (lambda t: t[1].pop("words"), "line 1 .*words"),
+    (lambda t: t[1]["words"][0].pop("end"), "line 1 word 0 .*end"),
+    (lambda t: t[1]["words"][0].update(start="2"), "line 1 word 0 .*start"),
+    (lambda t: t[1].update(startTime=3.0, endTime=2.5), "line 1 .*ends before it starts"),
+])
+def test_a_malformed_jamwise_timing_is_named_not_a_bare_error(bad, message):
+    timing = [_line("Go", 0.0, 1.0), _line("On", 1.0, 2.0)]
+    bad(timing)
+    with pytest.raises(ValueError, match=message):
+        jamwise_lines(timing, ["Go", "On"], 5.0)

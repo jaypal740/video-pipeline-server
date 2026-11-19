@@ -95,6 +95,8 @@ def problems(draft: BeatLessonDraft, lines: list[LyricLine], band: GradeBand, du
     if not draft.key_terms:
         found.append("key_terms must list the terms the song teaches")
     indexes = [l.index for l in lines]
+    if any(b.first_line > b.last_line or b.first_line not in indexes or b.last_line not in indexes for b in draft.beats):
+        return found + ["every beat needs first_line <= last_line and lines inside the song"]
     if [i for b in draft.beats for i in range(b.first_line, b.last_line + 1)] != indexes:
         return found + [f"beats must cover lines {indexes[0]}-{indexes[-1]} once each, in order, without gaps"]
     by_index = {l.index: l for l in lines}

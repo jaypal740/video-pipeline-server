@@ -42,3 +42,8 @@ def test_missing_audio_or_empty_lyrics_are_refused(service, audio, tmp_path):
 def test_unknown_song_is_a_lookup_error(service):
     with pytest.raises(LookupError):
         service.get("missing")
+
+
+def test_neither_lyrics_nor_a_jamwise_export_is_refused(service, audio):
+    with pytest.raises(ValueError, match="lyrics or a JamWise export is required"):
+        service.add("c", audio, None)

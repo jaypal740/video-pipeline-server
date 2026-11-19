@@ -1,10 +1,10 @@
 import base64
 
 import anthropic
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from src.service.llm.llm_prices import PRICES, price_of
-from src.service.llm.llm_service import LabelledImage, LlmRefusal, ProviderReply
+from src.service.llm.llm_service import LabelledImage, LlmCall, LlmError, LlmRefusal, LlmTruncated, ProviderReply
 
 # Thinking and the answer share this limit; above about 21k tokens the SDK only allows a streamed call.
 MAX_TOKENS = 64000
@@ -20,8 +20,9 @@ class AnthropicService:
 
     name = "anthropic"
 
-    def __init__(self, api_key: str | None) -> None:
+    def __init__(self, api_key: str | None, timeout_s: float = 600.0, max_retries: int = 2) -> None:
         self._api_key = api_key
+        self._timeout_s, self._max_retries = timeout_s, max_retries
         self._client: anthropic.Anthropic | None = None
 
     def parse(self, model: str, system: str, user: str, output_type: type[BaseModel], effort: str) -> ProviderReply:
@@ -47,16 +48,23 @@ class AnthropicService:
         if response.stop_reason == "refusal":
             details = response.stop_details
             raise LlmRefusal(details.explanation if details else "no explanation")
-        if response.stop_reason == "max_tokens":
-            raise ValueError(f"{model} hit max_tokens={MAX_TOKENS}")
         usage = response.usage
         price = PRICES.get(response.model) or price_of(model)    # a fallback may have answered
         cached = usage.cache_read_input_tokens or 0
         written = usage.cache_creation_input_tokens or 0
         cost = (usage.input_tokens * price.input + cached * price.cached_input + written * price.input * 1.25
                 + usage.output_tokens * price.output) / 1_000_000
+        spent = LlmCall(provider=self.name, model=model, attempts=1, input_tokens=usage.input_tokens + cached + written,
+                        output_tokens=usage.output_tokens, cost_usd=cost)
+        if response.stop_reason == "max_tokens":
+            raise LlmTruncated(f"{model} hit max_tokens={MAX_TOKENS}", spent, problems=["the answer was cut off"])
         text = "".join(b.text for b in response.content if b.type == "text")
-        return ProviderReply(output=output_type.model_validate_json(text), model=response.model,
+        try:
+            output = output_type.model_validate_json(text)
+        except ValidationError as exc:
+            raise LlmError(f"{model} gave an answer that does not fit the schema: {exc}", spent,
+                           problems=[str(exc)]) from exc
+        return ProviderReply(output=output, model=response.model,
                              input_tokens=usage.input_tokens + cached + written,
                              output_tokens=usage.output_tokens, cost_usd=cost)
 
@@ -64,5 +72,6 @@ class AnthropicService:
         if self._client is None:
             if not self._api_key:
                 raise RuntimeError("CLAUDE_API_KEY is not set")
-            self._client = anthropic.Anthropic(api_key=self._api_key)
+            self._client = anthropic.Anthropic(api_key=self._api_key, timeout=self._timeout_s,
+                                                max_retries=self._max_retries)
         return self._client

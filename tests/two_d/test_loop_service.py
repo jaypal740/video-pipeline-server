@@ -58,9 +58,12 @@ class FakeCutter:
     """Reads every loop as good, except the checks queued in `found`, one per loop in the order made."""
 
     def __init__(self):
-        self.found = []
+        self.found, self.explode_at, self.cuts = [], None, 0
 
     def cut(self, data):
+        self.cuts += 1
+        if self.cuts == self.explode_at:
+            raise RuntimeError("the cutter fell over")
         check = self.found.pop(0) if self.found else loop()
         return check, None if check.uncut else b"webm of " + data, picture((20, 160, 40))
 
@@ -158,6 +161,20 @@ def test_only_the_loops_the_first_seconds_need_are_made_and_the_same_drawings_re
     assert len(video.calls) == 2 and again["dot_small"].path == first["dot_small"].path and again["dot_small"].cost_usd == 0.0
 
 
+def test_one_loop_that_raises_does_not_discard_the_other_paid_for_and_a_re_run_reuses_it(container, stage):
+    service, video, cutter, _, run = stage
+    cutter.explode_at = 2
+    with pytest.raises(RuntimeError, match="fell over"):
+        service.run(run.id)
+    assets = container.asset_repository()
+    kept = assets.assets.list(run_id=run.id, stage=StageName.LOOPS)
+    assert len(kept) == 1 and kept[0].review == ReviewState.PASSED and assets.run_cost(run.id) == pytest.approx(0.161)
+    assert container.run_repository().stage(run.id, StageName.LOOPS).status == StageStatus.FAILED
+    made = service.run(run.id)
+    assert len(video.calls) == 3 and len(made) == 2                       # only the lost one is paid for again
+    assert sum(a.params.get("reused_from") is not None for a in made.values()) == 1
+
+
 def test_a_loop_that_fails_is_made_again_told_what_was_wrong(container, stage):
     service, video, cutter, vision, run = stage
     cutter.found = [loop(gap=160.0)]
@@ -200,6 +217,32 @@ def test_no_loop_is_made_until_the_film_check_has_passed_these_drawings(containe
     with pytest.raises(ValueError, match="run the check stage first"):
         service.run(run.id)
     assert video.calls == []
+
+
+def test_a_clip_that_reads_no_frames_is_an_unusable_loop_not_an_error():
+    sink = io.BytesIO()
+    gap, motion, _, uncut = cut_frames(np.zeros((0, 64, 64, 3), dtype=np.uint8), sink)
+    assert (gap, motion, sink.getvalue()) == (0.0, 0.0, b"") and len(uncut) == 1
+
+
+def test_a_clip_with_rotation_metadata_is_read_at_its_probed_size(tmp_path):
+    raw, clip = tmp_path / "loop.rgb", tmp_path / "loop.mp4"
+    raw.write_bytes(frames([40, 52, 64, 52, 40] * 4, size=128, box=48).tobytes())
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "128x128", "-r", "10", "-i",
+                    str(raw), "-pix_fmt", "yuv420p", "-metadata:s:v", "rotate=90", str(clip)], check=True)
+    ffmpeg = FfmpegService()
+    probed = ffmpeg.probe(clip)
+    check, _, frame = LoopCutService(ffmpeg).cut(clip.read_bytes())
+    assert check.frames == 20 and (check.width, check.height) == (probed["width"], probed["height"])
+    assert Image.open(io.BytesIO(frame)).size == (check.width, check.height)
+
+
+def test_a_run_with_no_drawings_stage_is_refused_clearly_even_when_nothing_is_to_animate(container, stage):
+    service, _, _, _, run = stage
+    runs = container.run_repository()
+    runs.stage_states.delete(runs.stage(run.id, StageName.VISUAL_IDENTITY).id)
+    with pytest.raises(ValueError, match="has not passed its check"):
+        service.run(run.id, until=0)
 
 
 def test_a_run_needs_its_drawings_before_its_loops(container, stage):

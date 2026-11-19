@@ -11,7 +11,7 @@ from src.schema.run.stage_state_schema import StageState
 from src.schema.song.song_analysis_schema import LyricLine, SongAnalysis, TimedWord
 from src.schema.song.song_schema import Song, SongStatus
 from src.schema.storyboard.storyboard_schema import Continuity, Position
-from src.service.llm.llm_service import LlmError, ProviderReply
+from src.service.llm.llm_service import LlmCall, LlmError, ProviderReply
 
 LINES = [LyricLine(index=i, text=t, start=i * 4, end=i * 4 + 3.8, confidence=0.9)
          for i, t in enumerate(["This is a colony.", "In 1858 it grew.", "It fills the dish."])]
@@ -335,3 +335,72 @@ def test_a_2d_run_is_refused_before_any_call(container, run):
     with pytest.raises(ValueError, match="is a 2d film"):
         storyboard(container, claude).run(run.id)
     assert claude.prompts == []
+
+
+class SplitClaude:
+    """Answers by what is asked, so the sequences written at the same time get their own replies."""
+    name = "anthropic"
+
+    def __init__(self, second):
+        self.second, self.slots = second, {}
+
+    def parse(self, model, system, user, output_type, effort):
+        if output_type.__name__ == "BoardHeader":
+            singer = {"id": "singer", "kind": "person", "look": "A girl in a bright orange jacket", "size": "child",
+                      "scale": "human", "star": True}
+            colony = {"id": "colony", "kind": "thing", "look": "A teal bacterial colony", "size": "a few mm",
+                      "scale": "object"}
+            reply = header(cast=[singer, colony], sequence_places=("dish", "dish"))
+        elif "write sequence 2 of 2" in user:
+            if isinstance(self.second, Exception):
+                raise self.second
+            reply = self.second
+        else:
+            reply = sequence(shot("s01", size="wide"), shot("s02"))
+        return ProviderReply(output=output_type(**reply), model=model, input_tokens=1000, output_tokens=500,
+                             cost_usd=0.05)
+
+
+@pytest.fixture
+def own_plan(container, run, monkeypatch):
+    """A song with its own plan (no host) whose lesson has two sequences, written at the same time."""
+    monkeypatch.setattr("src.service.stage.stage_common.export_beside", lambda audio_path: {"jamwise": 1})
+    runs = container.run_repository()
+    state = runs.stage(run.id, StageName.LESSON)
+    sequences = state.output["sequences"]
+    state.output = {**state.output, "sequences": [{**sequences[0], "last_line": 1}, {**sequences[0], "first_line": 2}]}
+    runs.stage_states.update(state)
+
+
+def test_a_sequence_failing_beside_others_still_costs_every_call_and_keeps_the_finished_ones(container, run, own_plan):
+    claude = SplitClaude(RuntimeError("provider down"))
+    container.anthropic_service.override(providers.Object(claude))
+    with pytest.raises(RuntimeError, match="provider down"):
+        container.storyboard_service().run(run.id)
+    state = container.run_repository().stage(run.id, StageName.STORYBOARD)
+    assert state.status == StageStatus.FAILED and state.output["sequence"] == 2
+    assert [s["slot"] for s in state.output["draft"]["shots"]] == ["s01", "s02"]
+    assert container.asset_repository().run_cost(run.id) == pytest.approx(0.10)      # header + the sequence that finished
+
+
+def test_a_sequence_that_misses_its_slots_fails_with_a_named_error(container, run, own_plan):
+    claude = SplitClaude(sequence(shot("s01")))
+    container.anthropic_service.override(providers.Object(claude))
+    with pytest.raises(LlmError, match="no valid answer"):
+        container.storyboard_service().run(run.id)
+    state = container.run_repository().stage(run.id, StageName.STORYBOARD)
+    assert state.status == StageStatus.FAILED and state.output["sequence"] == 2
+
+
+def test_a_sound_off_check_that_fails_keeps_the_paid_board_and_its_cost(container, run):
+    class Failing(FakeClaude):
+        def parse(self, model, system, user, output_type, effort):
+            if output_type.__name__ == "SoundOffWatch":
+                raise LlmError("watch failed", LlmCall(provider="anthropic", model=model, attempts=1, cost_usd=0.07))
+            return super().parse(model, system, user, output_type, effort)
+
+    result = storyboard(container, Failing(header(), sequence())).run(run.id)
+    state = container.run_repository().stage(run.id, StageName.STORYBOARD)
+    assert state.status == StageStatus.DONE and [s.id for s in result.shots] == ["s01", "s02", "s03"]
+    assert any(f.startswith("sound off: the check could not be done") for f in result.flags)
+    assert container.asset_repository().run_cost(run.id) == pytest.approx(0.10 + 3 * 0.07)    # the watch is tried three times

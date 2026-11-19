@@ -1,7 +1,6 @@
 import re
 
 from src.schema.two_d.beat_schema import Beat, BeatType
-from src.schema.lesson.lesson_schema import GradeBand
 from src.schema.song.song_analysis_schema import TimedWord
 from src.schema.two_d.script_schema import (Action, BeatScript, BeatScriptDraft, Drawing, DrawingKind, DrawingList,
                                             Pos, Screen, ScriptRepair, Verb)
